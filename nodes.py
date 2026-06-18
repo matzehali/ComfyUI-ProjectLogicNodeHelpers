@@ -215,7 +215,8 @@ class ProjectLogic:
             },
             "optional": {
                 "plate_clip": ("STRING", {"default": "", "tooltip": "Main base clip inside the shot folder (sequence pattern or movie). Relative to the shot folder unless absolute."}),
-                "passes_json": ("STRING", {"default": _DEFAULT_PASSES, "multiline": True}),
+                # Single-line + JS-hidden; the pass-line editor is the real UI.
+                "passes_json": ("STRING", {"default": _DEFAULT_PASSES}),
             },
         }
 
