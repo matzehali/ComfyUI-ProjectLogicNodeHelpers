@@ -75,14 +75,28 @@ function makeInput(value, placeholder, onChange) {
 
 // --------------------------------------------------------------------------- //
 // Shot / plate dropdowns
+//
+// Scans run only on UI reload, on the manual buttons, and (debounced) once a
+// path edit settles — never live per keystroke. Each scan carries a request
+// token so a slow earlier response can't clobber the latest one.
 // --------------------------------------------------------------------------- //
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
 async function refreshShots(node) {
   const projectW = getWidget(node, "project_path");
   const shotW = getWidget(node, "shot");
   if (!projectW || !shotW) return;
+  const token = (node._plShotReq = (node._plShotReq || 0) + 1);
   const data = await fetchJSON(
     `/projectlogic/subfolders?path=${encodeURIComponent(projectW.value || "")}`,
   );
+  if (token !== node._plShotReq) return; // a newer scan superseded this one
   asCombo(shotW, data?.folders || []);
   broadcastProjects();
   node.setDirtyCanvas?.(true, true);
@@ -95,9 +109,11 @@ async function refreshPlates(node) {
   if (!projectW || !shotW || !plateW) return;
   const root = (projectW.value || "").replace(/[\\/]+$/, "");
   const shotDir = root && shotW.value ? `${root}/${shotW.value}` : root;
+  const token = (node._plPlateReq = (node._plPlateReq || 0) + 1);
   const data = await fetchJSON(
     `/projectlogic/sequences?path=${encodeURIComponent(shotDir)}`,
   );
+  if (token !== node._plPlateReq) return;
   asCombo(plateW, ["", ...(data?.sequences || [])]);
   broadcastProjects();
   node.setDirtyCanvas?.(true, true);
@@ -143,13 +159,19 @@ function setupProjectNode(node) {
   asCombo(shotW, []);
   asCombo(plateW, [""]);
 
+  // Path edits are debounced so the scan fires only once typing settles.
+  const debouncedScan = debounce(
+    () => refreshShots(node).then(() => refreshPlates(node)),
+    600,
+  );
   if (projectW) {
     const prev = projectW.callback;
     projectW.callback = function () {
       prev?.apply(this, arguments);
-      refreshShots(node).then(() => refreshPlates(node));
+      debouncedScan();
     };
   }
+  // Picking a shot is a finished change -> rescan plates immediately.
   if (shotW) {
     const prev = shotW.callback;
     shotW.callback = function () {
