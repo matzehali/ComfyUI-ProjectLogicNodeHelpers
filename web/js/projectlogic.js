@@ -104,6 +104,32 @@ async function refreshPlates(node) {
   node.setDirtyCanvas?.(true, true);
 }
 
+// --------------------------------------------------------------------------- //
+// Single-project enforcement: only the first Project Logic node is active; any
+// extras are bypassed, veiled, and excluded from the broadcast.
+// --------------------------------------------------------------------------- //
+function projectNodes() {
+  return (app.graph?._nodes || []).filter((n) => n.comfyClass === "ProjectLogic");
+}
+
+function setDuplicate(node, isDup) {
+  node._plDuplicate = isDup;
+  if (isDup) {
+    node.mode = 4; // bypass -> never executes
+    node._plForcedBypass = true;
+  } else if (node._plForcedBypass) {
+    node.mode = 0;
+    node._plForcedBypass = false;
+  }
+  node.setDirtyCanvas?.(true, true);
+}
+
+function enforceSingleProject() {
+  const all = projectNodes().sort((a, b) => (a.id || 0) - (b.id || 0));
+  all.forEach((n, i) => setDuplicate(n, i > 0));
+  broadcastProjects();
+}
+
 function setupProjectNode(node) {
   const projectW = getWidget(node, "project_path");
   const shotW = getWidget(node, "shot");
@@ -111,6 +137,28 @@ function setupProjectNode(node) {
 
   asCombo(shotW, []);
   asCombo(plateW, [""]);
+
+  // Veil overlay when this node is a disabled duplicate.
+  const prevDraw = node.onDrawForeground;
+  node.onDrawForeground = function (ctx) {
+    prevDraw?.apply(this, arguments);
+    if (!this._plDuplicate || this.flags?.collapsed) return;
+    ctx.save();
+    ctx.fillStyle = "rgba(120,30,40,0.45)";
+    ctx.fillRect(0, 0, this.size[0], this.size[1]);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("⚠ duplicate — only one Project Logic allowed", this.size[0] / 2, 16);
+    ctx.restore();
+  };
+
+  // Re-evaluate primary/duplicate when this node is removed.
+  const prevRem = node.onRemoved;
+  node.onRemoved = function () {
+    prevRem?.apply(this, arguments);
+    setTimeout(enforceSingleProject, 10);
+  };
 
   if (projectW) {
     const prev = projectW.callback;
@@ -359,6 +407,8 @@ app.registerExtension({
       if (node.comfyClass === "ProjectLogic") {
         setupProjectNode(node);
         buildPassEditor(node);
+        // Defer so the new node is in the graph before we count duplicates.
+        setTimeout(enforceSingleProject, 30);
       } else if (node.comfyClass === "ProjectLogicExtract") {
         setupConsumer(node, true);
       } else if (node.comfyClass === "ProjectLogicPreview") {

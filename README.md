@@ -73,3 +73,6 @@ the node** after a run — no separate Display node needed.
   (`/projectlogic/subfolders`, `/projectlogic/sequences`). Without the JS layer the
   fields still work as plain text entry.
 - `framecount` is a count only (globs the `####` pattern); no start/end range.
+- Only one Project Logic (hub) node is active per workflow. The first one is the
+  primary; any extra hub node is bypassed, veiled with a warning, and excluded from
+  the broadcast.

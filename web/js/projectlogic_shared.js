@@ -102,6 +102,7 @@ export function syncProjects() {
   for (const k in PROJECTS) delete PROJECTS[k];
   for (const n of app.graph?._nodes || []) {
     if (n.comfyClass !== "ProjectLogic") continue;
+    if (n._plDuplicate) continue;  // disabled extra project node
     const id = getWidget(n, "project_id")?.value || "main";
     PROJECTS[id] = hubConfig(n);
   }
