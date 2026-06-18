@@ -209,7 +209,9 @@ class ProjectLogic:
             "required": {
                 "project_path": ("STRING", {"default": "", "tooltip": "VFX root folder containing shot subfolders."}),
                 "shot": ("STRING", {"default": "", "tooltip": "Shot name / number (subfolder of project_path)."}),
-                "global_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": True, "tooltip": "Global seed embedded into final output filenames ({seed} token)."}),
+                # String value sets the default control mode (INT defaults to
+                # "fixed" with a plain True, which never advances the seed).
+                "global_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": "randomize", "tooltip": "Global seed embedded into final output filenames ({seed} token)."}),
                 "default_template": ("STRING", {"default": DEFAULT_TEMPLATE, "tooltip": "Default path layout. Tokens: {root} {shot} {type} {ext} {seed}; #### = frame padding."}),
                 "output_template": ("STRING", {"default": OUTPUT_TEMPLATE, "tooltip": "Final-output layout (own subfolder, includes {seed})."}),
             },
