@@ -1,18 +1,18 @@
 import { app } from "../../../scripts/app.js";
 
-// Shared helpers + the single-project broadcast, imported by the hub UI
-// (projectlogic.js) and the router UI (projectlogic_switch.js).
+// Shared helpers for the hub UI (projectlogic.js) and router UI
+// (projectlogic_switch.js). Consumers read the hub's config from the submitted
+// PROMPT at run time, so there's nothing to mirror here — the only cross-node
+// signal is a "projectlogic:changed" event so edit-time dropdowns/labels refresh.
 
-// Config keys mirrored hub -> consumer (must match CONFIG_FIELDS in nodes.py).
-export const CONFIG_FIELDS = [
-  "project_path", "shot", "global_seed",
-  "default_template", "output_template", "plate_clip", "passes_json",
-];
-
-// Node classes that carry a hidden project_config (rebuild bundle in Python).
-const CONFIG_CONSUMERS = [
-  "ProjectLogicExtract", "ProjectLogicPreview", "ProjectLogicRouterSlave",
-];
+// Notify edit-time listeners (pass dropdowns, router slot labels) to refresh.
+export function notifyChange() {
+  try {
+    window.dispatchEvent(new CustomEvent("projectlogic:changed"));
+  } catch (e) {
+    /* no-op */
+  }
+}
 
 // --------------------------------- widgets --------------------------------- //
 export function getWidget(node, name) {
@@ -131,60 +131,21 @@ export function passesFromNode(hubNode) {
   return passesFromArr(arr);
 }
 
-// ----------------------------- project registry ---------------------------- //
-function hubConfig(node) {
-  const cfg = {};
-  for (const f of CONFIG_FIELDS) {
-    cfg[f] = fieldValue(node, f);  // resolves wired inputs upstream
-  }
-  if (cfg.global_seed != null) cfg.global_seed = Number(cfg.global_seed) || 0;
-  return cfg;
-}
-
 // The single active (primary) hub node, if any.
 export function getPrimaryHub() {
   for (const n of app.graph?._nodes || []) {
-    if (n.comfyClass === "ProjectLogic" && !n._plDuplicate) return n;
+    if (n.comfyClass === "ProjectLogic") return n;
   }
   return null;
 }
 
-export function primaryConfig() {
-  const n = getPrimaryHub();
-  return n ? hubConfig(n) : null;
-}
-
+// Pass-type list of the project (configured passes + output + plate).
 export function passesForPrimary() {
-  const cfg = primaryConfig();
-  let arr = [];
-  if (cfg && cfg.passes_json) {
-    try {
-      arr = JSON.parse(cfg.passes_json);
-    } catch (e) {
-      arr = [];
-    }
-  }
-  return passesFromArr(arr);
+  const hub = getPrimaryHub();
+  return hub ? passesFromNode(hub) : [];
 }
 
 // Pass types for a consumer come from the single project.
 export function consumerTypes(node) {
   return passesForPrimary();
-}
-
-// Mirror the project config into every config-consumer's hidden widget, then
-// let interested nodes (e.g. router slaves) refresh.
-export function broadcastProjects() {
-  const cfg = primaryConfig();
-  const json = cfg ? JSON.stringify(cfg) : "";
-  for (const n of app.graph?._nodes || []) {
-    if (!CONFIG_CONSUMERS.includes(n.comfyClass)) continue;
-    const w = getWidget(n, "project_config");
-    if (w) w.value = json;
-  }
-  try {
-    window.dispatchEvent(new CustomEvent("projectlogic:changed"));
-  } catch (e) {
-    /* no-op */
-  }
 }

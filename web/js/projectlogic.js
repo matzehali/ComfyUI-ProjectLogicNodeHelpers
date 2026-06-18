@@ -6,7 +6,7 @@ import {
   asCombo,
   comboFromFn,
   consumerTypes,
-  broadcastProjects,
+  notifyChange,
   fieldValue,
   upstreamSourceNode,
 } from "./projectlogic_shared.js";
@@ -90,9 +90,16 @@ function debounce(fn, ms) {
   };
 }
 
-// Effective path: typed widget value, or the wired upstream string.
+// Effective path: typed widget value, or the wired upstream string. When wired,
+// reflect the resolved value back into the widget so it shows the real input.
 function projectPath(node) {
-  return fieldValue(node, "project_path") || "";
+  const v = fieldValue(node, "project_path") || "";
+  const inSlot = node.inputs?.find((i) => i.name === "project_path");
+  if (inSlot && inSlot.link != null) {
+    const w = getWidget(node, "project_path");
+    if (w && w.value !== v) w.value = v;
+  }
+  return v;
 }
 
 async function refreshShots(node) {
@@ -104,7 +111,7 @@ async function refreshShots(node) {
   );
   if (token !== node._plShotReq) return; // a newer scan superseded this one
   asCombo(shotW, data?.folders || []);
-  broadcastProjects();
+  notifyChange();
   node.setDirtyCanvas?.(true, true);
 }
 
@@ -120,7 +127,7 @@ async function refreshPlates(node) {
   );
   if (token !== node._plPlateReq) return;
   asCombo(plateW, ["", ...(data?.sequences || [])]);
-  broadcastProjects();
+  notifyChange();
   node.setDirtyCanvas?.(true, true);
 }
 
@@ -181,7 +188,7 @@ function setupProjectNode(node) {
       const prev = w.callback;
       w.callback = function () {
         prev?.apply(this, arguments);
-        broadcastProjects(); // keep config fresh immediately
+        notifyChange(); // keep config fresh immediately
         debouncedScan();     // rescan once edits settle
       };
     }
@@ -201,7 +208,7 @@ function setupProjectNode(node) {
     occ?.apply(this, arguments);
     setTimeout(() => {
       hookUpstream();
-      broadcastProjects();
+      notifyChange();
       debouncedScan();
     }, 30);
   };
@@ -221,12 +228,13 @@ function setupProjectNode(node) {
     const prev = w.callback;
     w.callback = function () {
       prev?.apply(this, arguments);
-      broadcastProjects();
+      notifyChange();
     };
   }
 
-  node.addWidget("button", "↻ scan shots", null, () => refreshShots(node));
-  node.addWidget("button", "↻ scan plate clips", null, () => refreshPlates(node));
+  node.addWidget("button", "↻ rescan", null, () =>
+    refreshShots(node).then(() => refreshPlates(node)),
+  );
 
   const doRefresh = () => {
     hookUpstream();
@@ -277,7 +285,7 @@ function buildPassEditor(node) {
   function commit() {
     const out = rows.filter((r) => r.type && r.type !== "none");
     passesW.value = JSON.stringify(out);
-    broadcastProjects();
+    notifyChange();
   }
 
   function render() {
@@ -382,27 +390,13 @@ function buildPassEditor(node) {
 }
 
 // --------------------------------------------------------------------------- //
-// Consumers (Extract / Preview): config mirror from the single hub
+// Consumers (Extract / Preview): config comes from the PROMPT at run time, so
+// the only edit-time job is the pass_name dropdown (Extract).
 // --------------------------------------------------------------------------- //
 function setupConsumer(node, withPassName) {
-  hideWidget(getWidget(node, "project_config"));
-
   if (withPassName) {
     comboFromFn(getWidget(node, "pass_name"), () => consumerTypes(node), "base");
   }
-
-  const refresh = () => broadcastProjects();
-  const occ = node.onConnectionsChange;
-  node.onConnectionsChange = function () {
-    occ?.apply(this, arguments);
-    setTimeout(refresh, 10);
-  };
-  const onCfg = node.onConfigure;
-  node.onConfigure = function () {
-    onCfg?.apply(this, arguments);
-    setTimeout(refresh, 50);
-  };
-  setTimeout(refresh, 50);
 }
 
 function setupPreview(node) {
@@ -441,7 +435,7 @@ app.registerExtension({
         buildPassEditor(node);
         // Defer so the node is in the graph; remove it if it's a 2nd hub.
         setTimeout(() => {
-          if (!removeIfDuplicate(node)) broadcastProjects();
+          if (!removeIfDuplicate(node)) notifyChange();
         }, 30);
       } else if (node.comfyClass === "ProjectLogicExtract") {
         setupConsumer(node, true);

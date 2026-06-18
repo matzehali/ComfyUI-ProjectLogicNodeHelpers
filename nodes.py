@@ -38,7 +38,7 @@ CATEGORY = "projectlogic"
 
 MAX_SWITCH_INPUTS = 16
 
-# Keys mirrored from the hub into a consumer's project_config (must match the JS).
+# Hub config keys read from the submitted prompt to rebuild the bundle.
 CONFIG_FIELDS = (
     "project_path", "shot", "global_seed",
     "default_template", "output_template", "plate_clip", "passes_json",
@@ -149,15 +149,36 @@ def build_bundle(project_path="", shot="", global_seed=0,
     }
 
 
-def _resolve_bundle(project_config):
-    """Rebuild the bundle from the broadcast config JSON (or None)."""
-    if project_config:
-        try:
-            cfg = json.loads(project_config)
-        except (ValueError, TypeError):
-            cfg = None
-        if isinstance(cfg, dict):
-            cfg = {k: v for k, v in cfg.items() if k in CONFIG_FIELDS}
+def _prompt_field(prompt, ins, name):
+    """Read a hub field value from the submitted prompt.
+
+    Widget values come through directly; a wired input is a ``[node_id, slot]``
+    link, which we resolve by reading the first string value off the upstream
+    node (covers string/primitive source nodes).
+    """
+    v = ins.get(name)
+    if isinstance(v, list) and len(v) == 2:
+        up = prompt.get(str(v[0])) or prompt.get(v[0])
+        if isinstance(up, dict):
+            for val in (up.get("inputs") or {}).values():
+                if isinstance(val, str):
+                    return val
+        return None
+    return v
+
+
+def _bundle_from_prompt(prompt):
+    """Find the single ProjectLogic node in the prompt and build its bundle."""
+    if not isinstance(prompt, dict):
+        return None
+    for node in prompt.values():
+        if isinstance(node, dict) and node.get("class_type") == "ProjectLogic":
+            ins = node.get("inputs", {}) or {}
+            cfg = {}
+            for k in CONFIG_FIELDS:
+                val = _prompt_field(prompt, ins, k)
+                if val is not None:
+                    cfg[k] = val
             return build_bundle(**cfg)
     return None
 
@@ -223,10 +244,7 @@ class ProjectLogicExtract:
                 # Populated in JS from the project's configured passes.
                 "pass_name": ("STRING", {"default": "base"}),
             },
-            "optional": {
-                # Mirrored in by the JS broadcast layer; hidden in the UI.
-                "project_config": ("STRING", {"default": ""}),
-            },
+            "hidden": {"prompt": "PROMPT"},
         }
 
     RETURN_TYPES = ("STRING", "STRING", "STRING", "INT", "INT")
@@ -238,12 +256,11 @@ class ProjectLogicExtract:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def extract(self, pass_name, project_config=""):
-        bundle = _resolve_bundle(project_config)
+    def extract(self, pass_name, prompt=None):
+        bundle = _bundle_from_prompt(prompt)
         if bundle is None:
             raise ValueError(
-                "ProjectLogicExtract: no project. Add a Project Logic node "
-                "(or wire its PROJECT_LOGIC output here)."
+                "ProjectLogicExtract: no Project Logic node found in the workflow."
             )
 
         entry = _pass_for(bundle, pass_name)
@@ -298,18 +315,15 @@ class ProjectLogicRouterMaster:
 class ProjectLogicRouterSlave:
     """Routes one of its labelled inputs to the output based on the active pass.
 
-    Input slots (``input_1..input_N``) map, in order, to the project's pass types
-    (configured passes + ``output`` + ``plate``) — the same ordering the JS uses
-    for the slot labels. ``active_type`` is kept in sync with the
-    ProjectLogicRouterMaster sharing this node's ``router_id``.
+    The JS layer renames each input slot to a project pass type, so an input
+    connected to the active pass arrives in ``kwargs`` keyed by that type name.
+    ``active_type`` is kept in sync with the ProjectLogicRouterMaster sharing
+    this node's ``router_id``.
     """
 
     @classmethod
     def INPUT_TYPES(cls):
-        optional = {
-            # Mirrored in by the JS broadcast layer; hidden in the UI.
-            "project_config": ("STRING", {"default": ""}),
-        }
+        optional = {}
         for i in range(1, MAX_SWITCH_INPUTS + 1):
             optional[f"input_{i}"] = (ANY,)
         return {
@@ -325,20 +339,14 @@ class ProjectLogicRouterSlave:
     FUNCTION = "route"
     CATEGORY = CATEGORY
 
-    def route(self, router_id="main", active_type="", project_config="", **kwargs):
-        bundle = _resolve_bundle(project_config)
-        types = list(bundle.get("passes", {}).keys()) if bundle else []
-
-        val = None
-        if active_type and active_type in types:
-            val = kwargs.get(f"input_{types.index(active_type) + 1}")
-        if val is None:  # fall back to the first connected input
-            for i in range(1, MAX_SWITCH_INPUTS + 1):
-                v = kwargs.get(f"input_{i}")
-                if v is not None:
-                    val = v
-                    break
-        return (val,)
+    def route(self, router_id="main", active_type="", **kwargs):
+        # Slots are renamed to pass types, so the active input arrives by name.
+        if active_type and kwargs.get(active_type) is not None:
+            return (kwargs[active_type],)
+        for v in kwargs.values():  # fall back to the first connected input
+            if v is not None:
+                return (v,)
+        return (None,)
 
 
 # --------------------------------------------------------------------------- #
@@ -350,9 +358,7 @@ class ProjectLogicPreview:
     def INPUT_TYPES(cls):
         return {
             "required": {},
-            "optional": {
-                "project_config": ("STRING", {"default": ""}),
-            },
+            "hidden": {"prompt": "PROMPT"},
         }
 
     RETURN_TYPES = ("STRING",)
@@ -365,8 +371,8 @@ class ProjectLogicPreview:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def preview(self, project_config=""):
-        bundle = _resolve_bundle(project_config)
+    def preview(self, prompt=None):
+        bundle = _bundle_from_prompt(prompt)
         if bundle is None:
             text = "(no project — add a Project Logic node)"
             return {"ui": {"text": [text]}, "result": (text,)}
