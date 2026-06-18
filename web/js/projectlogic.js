@@ -6,7 +6,6 @@ import {
   asCombo,
   comboFromFn,
   consumerTypes,
-  listProjectIds,
   broadcastProjects,
 } from "./projectlogic_shared.js";
 
@@ -23,7 +22,7 @@ const EXT_OPTIONS = ["exr", "png", "jpg", "tiff", "webp", "mov", "mp4"];
 const KIND_OPTIONS = ["sequence", "movie"];
 
 const CONFIG_FIELDS = [
-  "project_id", "project_path", "shot", "global_seed",
+  "project_path", "shot", "global_seed",
   "default_template", "output_template", "plate_clip",
 ];
 
@@ -112,22 +111,28 @@ function projectNodes() {
   return (app.graph?._nodes || []).filter((n) => n.comfyClass === "ProjectLogic");
 }
 
-function setDuplicate(node, isDup) {
-  node._plDuplicate = isDup;
-  if (isDup) {
-    node.mode = 4; // bypass -> never executes
-    node._plForcedBypass = true;
-  } else if (node._plForcedBypass) {
-    node.mode = 0;
-    node._plForcedBypass = false;
+function popup(msg) {
+  console.warn("[projectlogic]", msg);
+  try {
+    if (app.ui?.dialog?.show) {
+      app.ui.dialog.show(msg);
+      return;
+    }
+  } catch (e) {
+    /* dialog API not available */
   }
-  node.setDirtyCanvas?.(true, true);
+  alert(msg);
 }
 
-function enforceSingleProject() {
-  const all = projectNodes().sort((a, b) => (a.id || 0) - (b.id || 0));
-  all.forEach((n, i) => setDuplicate(n, i > 0));
-  broadcastProjects();
+// Only one hub allowed: if this node is an extra, remove it.
+function removeIfDuplicate(node) {
+  const hubs = projectNodes().sort((a, b) => (a.id || 0) - (b.id || 0));
+  if (hubs.length > 1 && node !== hubs[0]) {
+    app.graph.remove(node);
+    popup("Only one Project Logic node is allowed per workflow.");
+    return true;
+  }
+  return false;
 }
 
 function setupProjectNode(node) {
@@ -137,28 +142,6 @@ function setupProjectNode(node) {
 
   asCombo(shotW, []);
   asCombo(plateW, [""]);
-
-  // Veil overlay when this node is a disabled duplicate.
-  const prevDraw = node.onDrawForeground;
-  node.onDrawForeground = function (ctx) {
-    prevDraw?.apply(this, arguments);
-    if (!this._plDuplicate || this.flags?.collapsed) return;
-    ctx.save();
-    ctx.fillStyle = "rgba(120,30,40,0.45)";
-    ctx.fillRect(0, 0, this.size[0], this.size[1]);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 12px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("⚠ duplicate — only one Project Logic allowed", this.size[0] / 2, 16);
-    ctx.restore();
-  };
-
-  // Re-evaluate primary/duplicate when this node is removed.
-  const prevRem = node.onRemoved;
-  node.onRemoved = function () {
-    prevRem?.apply(this, arguments);
-    setTimeout(enforceSingleProject, 10);
-  };
 
   if (projectW) {
     const prev = projectW.callback;
@@ -340,12 +323,9 @@ function buildPassEditor(node) {
 }
 
 // --------------------------------------------------------------------------- //
-// Consumers (Extract / Preview): project_id picker + config mirror
+// Consumers (Extract / Preview): config mirror from the single hub
 // --------------------------------------------------------------------------- //
 function setupConsumer(node, withPassName) {
-  const idW = getWidget(node, "project_id");
-  comboFromFn(idW, listProjectIds, "main");
-
   hideWidget(getWidget(node, "project_config"));
 
   if (withPassName) {
@@ -353,13 +333,6 @@ function setupConsumer(node, withPassName) {
   }
 
   const refresh = () => broadcastProjects();
-  if (idW) {
-    const prev = idW.callback;
-    idW.callback = function () {
-      prev?.apply(this, arguments);
-      refresh();
-    };
-  }
   const occ = node.onConnectionsChange;
   node.onConnectionsChange = function () {
     occ?.apply(this, arguments);
@@ -407,8 +380,10 @@ app.registerExtension({
       if (node.comfyClass === "ProjectLogic") {
         setupProjectNode(node);
         buildPassEditor(node);
-        // Defer so the new node is in the graph before we count duplicates.
-        setTimeout(enforceSingleProject, 30);
+        // Defer so the node is in the graph; remove it if it's a 2nd hub.
+        setTimeout(() => {
+          if (!removeIfDuplicate(node)) broadcastProjects();
+        }, 30);
       } else if (node.comfyClass === "ProjectLogicExtract") {
         setupConsumer(node, true);
       } else if (node.comfyClass === "ProjectLogicPreview") {

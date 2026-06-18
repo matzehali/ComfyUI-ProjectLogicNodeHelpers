@@ -4,7 +4,6 @@ import {
   hideWidget,
   comboFromFn,
   consumerTypes,
-  listProjectIds,
   broadcastProjects,
 } from "./projectlogic_shared.js";
 
@@ -15,7 +14,7 @@ import {
 //
 // The master sets a shared "active type" for a router_id; every slave with that
 // router_id routes the matching labelled input to its output. Slot labels and
-// ordering come from the project's passes (via project_id / wired bundle).
+// ordering come from the project's passes (broadcast or wired bundle).
 // --------------------------------------------------------------------------- //
 
 const MAX_INPUTS = 16;
@@ -48,11 +47,9 @@ function broadcast(id, val) {
 
 function setupMaster(node) {
   const idW = getWidget(node, "router_id");
-  const projW = getWidget(node, "project_id");
   const actW = getWidget(node, "active");
   if (!idW || !actW) return;
 
-  comboFromFn(projW, listProjectIds, "main");
   comboFromFn(actW, () => consumerTypes(node), "base");
 
   const prevAct = actW.callback;
@@ -86,9 +83,21 @@ function reconcileInputs(node, types) {
       node.addInput(`input_${j}`, "*");
       slot = node.inputs[node.inputs.length - 1];
     }
+    // The wire mapping stays input_j (Python), but display the pass type.
     slot.label = types[j - 1];
+    slot.localized_name = types[j - 1];
   }
   node.setSize?.(node.computeSize());
+}
+
+// Standalone so the hub-change listener can re-run it for any slave.
+function configureSlave(node) {
+  const idW = getWidget(node, "router_id");
+  const actW = getWidget(node, "active_type");
+  reconcileInputs(node, consumerTypes(node));
+  const a = ACTIVE[idW?.value];
+  if (a != null && actW) actW.value = a;
+  node.setDirtyCanvas?.(true, true);
 }
 
 // Draw a link from the active input slot to the output slot.
@@ -134,37 +143,24 @@ function installActiveLink(node) {
 
 function setupFollower(node) {
   const idW = getWidget(node, "router_id");
-  const projW = getWidget(node, "project_id");
-  const actW = getWidget(node, "active_type");
-  hideWidget(actW);
+  hideWidget(getWidget(node, "active_type"));
+  hideWidget(getWidget(node, "project_config"));
 
   // router_id: dropdown of all Router Master ids.
   comboFromFn(idW, listMasterIds, "main");
-  // project_id: dropdown of all projects (drives slot labels).
-  comboFromFn(projW, listProjectIds, "main");
 
-  function configure() {
-    const types = consumerTypes(node);
-    reconcileInputs(node, types);
-    const a = ACTIVE[idW?.value];
-    if (a != null && actW) actW.value = a;
-    broadcastProjects(); // refresh this slave's mirrored project_config
-    node.setDirtyCanvas?.(true, true);
-  }
+  const configure = () => {
+    configureSlave(node);
+    broadcastProjects(); // keep this slave's mirrored project_config fresh
+  };
 
-  for (const w of [idW, projW]) {
-    if (!w) continue;
-    const prev = w.callback;
-    w.callback = function () {
+  if (idW) {
+    const prev = idW.callback;
+    idW.callback = function () {
       prev?.apply(this, arguments);
       configure();
     };
   }
-  const occ = node.onConnectionsChange;
-  node.onConnectionsChange = function () {
-    occ?.apply(this, arguments);
-    setTimeout(configure, 10);
-  };
   const onCfg = node.onConfigure;
   node.onConfigure = function () {
     onCfg?.apply(this, arguments);
@@ -175,14 +171,40 @@ function setupFollower(node) {
   setTimeout(configure, 50);
 }
 
+// When the hub config changes, relabel every slave's inputs.
+window.addEventListener("projectlogic:changed", () => {
+  for (const n of app.graph?._nodes || []) {
+    if (n.comfyClass === "ProjectLogicRouterSlave") configureSlave(n);
+  }
+});
+
+// A slave needs a master: create one if the graph has none.
+function ensureMaster(node) {
+  const hasMaster = (app.graph?._nodes || []).some(
+    (n) => n.comfyClass === "ProjectLogicRouterMaster",
+  );
+  if (hasMaster) return;
+  const LG = window.LiteGraph;
+  if (!LG?.createNode) return;
+  const m = LG.createNode("ProjectLogicRouterMaster");
+  if (!m) return;
+  m.pos = [(node.pos?.[0] || 0) - 280, node.pos?.[1] || 0];
+  app.graph.add(m);
+}
+
 // ----------------------------- registration -------------------------------- //
 app.registerExtension({
   name: "projectlogic.router",
 
   async nodeCreated(node) {
     try {
-      if (node.comfyClass === "ProjectLogicRouterMaster") setupMaster(node);
-      else if (node.comfyClass === "ProjectLogicRouterSlave") setupFollower(node);
+      if (node.comfyClass === "ProjectLogicRouterMaster") {
+        setupMaster(node);
+      } else if (node.comfyClass === "ProjectLogicRouterSlave") {
+        setupFollower(node);
+        // Defer so a master from the same load settles before we add one.
+        setTimeout(() => ensureMaster(node), 120);
+      }
     } catch (e) {
       console.error("[projectlogic] router setup failed", node.comfyClass, e);
     }

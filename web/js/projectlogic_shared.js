@@ -1,6 +1,6 @@
 import { app } from "../../../scripts/app.js";
 
-// Shared helpers + the project_id broadcast registry, imported by the hub UI
+// Shared helpers + the single-project broadcast, imported by the hub UI
 // (projectlogic.js) and the router UI (projectlogic_switch.js).
 
 // Config keys mirrored hub -> consumer (must match CONFIG_FIELDS in nodes.py).
@@ -13,9 +13,6 @@ export const CONFIG_FIELDS = [
 const CONFIG_CONSUMERS = [
   "ProjectLogicExtract", "ProjectLogicPreview", "ProjectLogicRouterSlave",
 ];
-
-// project_id -> config object, rebuilt from the hub nodes on demand.
-export const PROJECTS = {};
 
 // --------------------------------- widgets --------------------------------- //
 export function getWidget(node, name) {
@@ -98,25 +95,21 @@ function hubConfig(node) {
   return cfg;
 }
 
-export function syncProjects() {
-  for (const k in PROJECTS) delete PROJECTS[k];
+// The single active (primary) hub node, if any.
+export function getPrimaryHub() {
   for (const n of app.graph?._nodes || []) {
-    if (n.comfyClass !== "ProjectLogic") continue;
-    if (n._plDuplicate) continue;  // disabled extra project node
-    const id = getWidget(n, "project_id")?.value || "main";
-    PROJECTS[id] = hubConfig(n);
+    if (n.comfyClass === "ProjectLogic" && !n._plDuplicate) return n;
   }
+  return null;
 }
 
-export function listProjectIds() {
-  syncProjects();
-  const ids = Object.keys(PROJECTS);
-  return ids.length ? ids : ["main"];
+export function primaryConfig() {
+  const n = getPrimaryHub();
+  return n ? hubConfig(n) : null;
 }
 
-export function passesForProject(id) {
-  syncProjects();
-  const cfg = PROJECTS[id];
+export function passesForPrimary() {
+  const cfg = primaryConfig();
   let arr = [];
   if (cfg && cfg.passes_json) {
     try {
@@ -128,31 +121,24 @@ export function passesForProject(id) {
   return passesFromArr(arr);
 }
 
-// Pass types for a consumer: prefer a wired hub, else the project_id broadcast.
+// Pass types for a consumer come from the single project.
 export function consumerTypes(node) {
-  const up = upstreamNode(node, "project");
-  if (up && up.comfyClass === "ProjectLogic") {
-    const t = passesFromNode(up);
-    if (t.length) return t;
-  }
-  return passesForProject(getWidget(node, "project_id")?.value || "main");
+  return passesForPrimary();
 }
 
-// Mirror the matching project config into every config-consumer's hidden widget.
+// Mirror the project config into every config-consumer's hidden widget, then
+// let interested nodes (e.g. router slaves) refresh.
 export function broadcastProjects() {
-  syncProjects();
+  const cfg = primaryConfig();
+  const json = cfg ? JSON.stringify(cfg) : "";
   for (const n of app.graph?._nodes || []) {
     if (!CONFIG_CONSUMERS.includes(n.comfyClass)) continue;
     const w = getWidget(n, "project_config");
-    if (!w) continue;
-    // A wired PROJECT_LOGIC input takes precedence; clear the mirror then.
-    const wired = upstreamNode(n, "project");
-    if (wired) {
-      w.value = "";
-      continue;
-    }
-    const id = getWidget(n, "project_id")?.value || "main";
-    const cfg = PROJECTS[id];
-    w.value = cfg ? JSON.stringify(cfg) : "";
+    if (w) w.value = json;
+  }
+  try {
+    window.dispatchEvent(new CustomEvent("projectlogic:changed"));
+  } catch (e) {
+    /* no-op */
   }
 }

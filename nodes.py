@@ -4,8 +4,8 @@ Nodes:
 
 * ``ProjectLogic``            – the hub: project folder + shot + plate clip + seed +
                                configurable pass lines -> one ``PROJECT_LOGIC`` bundle.
-                               Also broadcasts its config on a ``project_id`` so
-                               consumers can rebuild the bundle without a wire.
+                               Also broadcasts its config so consumers can rebuild the
+                               bundle without a wire (only one hub per workflow).
 * ``ProjectLogicExtract``     – selects a configured pass (dropdown auto-filled from
                                the project) and emits full_path / pathtofile / file /
                                framecount / seed.
@@ -15,8 +15,8 @@ Nodes:
                                master's active type to its output.
 * ``ProjectLogicPreview``     – shows the resolved bundle inline on the node.
 
-Consumers accept either a wired ``PROJECT_LOGIC`` input or a ``project_id`` whose
-config is mirrored in (by the JS broadcast layer) and rebuilt locally.
+Consumers accept either a wired ``PROJECT_LOGIC`` input or the broadcast config the
+JS layer mirrors in from the single hub, which they rebuild locally.
 
 The dynamic UI lives in ``web/js/``; the Python side stays usable with plain fields.
 """
@@ -149,10 +149,8 @@ def build_bundle(project_path="", shot="", global_seed=0,
     }
 
 
-def _resolve_bundle(project, project_config):
-    """Return a bundle from a wired input, else rebuild from a broadcast config."""
-    if isinstance(project, dict):
-        return project
+def _resolve_bundle(project_config):
+    """Rebuild the bundle from the broadcast config JSON (or None)."""
     if project_config:
         try:
             cfg = json.loads(project_config)
@@ -186,7 +184,6 @@ class ProjectLogic:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "project_id": ("STRING", {"default": "main", "tooltip": "Broadcast channel. Consumers with this project_id can rebuild the bundle without a wire."}),
                 "project_path": ("STRING", {"default": "", "tooltip": "VFX root folder containing shot subfolders."}),
                 "shot": ("STRING", {"default": "", "tooltip": "Shot name / number (subfolder of project_path)."}),
                 "global_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "tooltip": "Global seed embedded into final output filenames ({seed} token)."}),
@@ -199,23 +196,19 @@ class ProjectLogic:
             },
         }
 
-    RETURN_TYPES = ("PROJECT_LOGIC",)
-    RETURN_NAMES = ("project",)
+    # No output noodle: consumers read the config via the JS broadcast.
+    RETURN_TYPES = ()
     FUNCTION = "build"
     CATEGORY = CATEGORY
+    OUTPUT_NODE = True
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("nan")  # paths/counts depend on disk; always re-evaluate.
+        return float("nan")
 
-    def build(self, project_id, project_path, shot, global_seed, default_template,
+    def build(self, project_path, shot, global_seed, default_template,
               output_template, plate_clip="", passes_json=_DEFAULT_PASSES):
-        bundle = build_bundle(
-            project_path=project_path, shot=shot, global_seed=global_seed,
-            default_template=default_template, output_template=output_template,
-            plate_clip=plate_clip, passes_json=passes_json,
-        )
-        return (bundle,)
+        return {"ui": {}}
 
 
 # --------------------------------------------------------------------------- #
@@ -229,10 +222,8 @@ class ProjectLogicExtract:
             "required": {
                 # Populated in JS from the project's configured passes.
                 "pass_name": ("STRING", {"default": "base"}),
-                "project_id": ("STRING", {"default": "main"}),
             },
             "optional": {
-                "project": ("PROJECT_LOGIC",),
                 # Mirrored in by the JS broadcast layer; hidden in the UI.
                 "project_config": ("STRING", {"default": ""}),
             },
@@ -247,12 +238,12 @@ class ProjectLogicExtract:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def extract(self, pass_name, project_id="main", project=None, project_config=""):
-        bundle = _resolve_bundle(project, project_config)
+    def extract(self, pass_name, project_config=""):
+        bundle = _resolve_bundle(project_config)
         if bundle is None:
             raise ValueError(
-                "ProjectLogicExtract: no project. Wire a PROJECT_LOGIC input or set a "
-                "project_id matching a Project Logic node."
+                "ProjectLogicExtract: no project. Add a Project Logic node "
+                "(or wire its PROJECT_LOGIC output here)."
             )
 
         entry = _pass_for(bundle, pass_name)
@@ -287,11 +278,7 @@ class ProjectLogicRouterMaster:
         return {
             "required": {
                 "router_id": ("STRING", {"default": "main", "tooltip": "Followers with the same router_id track this selection."}),
-                "project_id": ("STRING", {"default": "main", "tooltip": "Project whose pass types fill the dropdown."}),
                 "active": ("STRING", {"default": "base", "tooltip": "Active pass type (dropdown from the project's passes)."}),
-            },
-            "optional": {
-                "project": ("PROJECT_LOGIC", {"tooltip": "Optional: source pass types from this bundle instead of project_id."}),
             },
         }
 
@@ -300,7 +287,7 @@ class ProjectLogicRouterMaster:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
 
-    def noop(self, router_id="main", project_id="main", active="base", project=None):
+    def noop(self, router_id="main", active="base"):
         return {"ui": {"active": [active], "router_id": [router_id]}}
 
 
@@ -320,7 +307,6 @@ class ProjectLogicRouterSlave:
     @classmethod
     def INPUT_TYPES(cls):
         optional = {
-            "project": ("PROJECT_LOGIC",),
             # Mirrored in by the JS broadcast layer; hidden in the UI.
             "project_config": ("STRING", {"default": ""}),
         }
@@ -329,7 +315,6 @@ class ProjectLogicRouterSlave:
         return {
             "required": {
                 "router_id": ("STRING", {"default": "main"}),
-                "project_id": ("STRING", {"default": "main"}),
                 "active_type": ("STRING", {"default": ""}),
             },
             "optional": optional,
@@ -340,9 +325,8 @@ class ProjectLogicRouterSlave:
     FUNCTION = "route"
     CATEGORY = CATEGORY
 
-    def route(self, router_id="main", project_id="main", active_type="",
-              project=None, project_config="", **kwargs):
-        bundle = _resolve_bundle(project, project_config)
+    def route(self, router_id="main", active_type="", project_config="", **kwargs):
+        bundle = _resolve_bundle(project_config)
         types = list(bundle.get("passes", {}).keys()) if bundle else []
 
         val = None
@@ -365,11 +349,8 @@ class ProjectLogicPreview:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {
-                "project_id": ("STRING", {"default": "main"}),
-            },
+            "required": {},
             "optional": {
-                "project": ("PROJECT_LOGIC",),
                 "project_config": ("STRING", {"default": ""}),
             },
         }
@@ -384,10 +365,10 @@ class ProjectLogicPreview:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def preview(self, project_id="main", project=None, project_config=""):
-        bundle = _resolve_bundle(project, project_config)
+    def preview(self, project_config=""):
+        bundle = _resolve_bundle(project_config)
         if bundle is None:
-            text = f"(no project for project_id '{project_id}')"
+            text = "(no project — add a Project Logic node)"
             return {"ui": {"text": [text]}, "result": (text,)}
 
         lines = [
