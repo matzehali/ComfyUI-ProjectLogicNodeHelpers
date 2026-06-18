@@ -1,4 +1,4 @@
-# ComfyUI-projectlogic
+# ComfyUI-ProjectLogicNodeHelpers
 
 Project/shot-driven path nodes for VFX workflows. Start a graph from one **hub
 node** (project folder + shot + plate clip + seed + the passes you care about)

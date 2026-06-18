@@ -24,15 +24,15 @@ try:
         from .server import register_routes
         register_routes()
     except Exception as route_err:  # pragma: no cover - non-fatal
-        print(f"[ComfyUI-projectlogic] ⚠️  routes not registered: {route_err}")
+        print(f"[ComfyUI-ProjectLogicNodeHelpers] ⚠️  routes not registered: {route_err}")
 
     print(
-        f"[ComfyUI-projectlogic] Nodes loaded {NODE_VERSION}: "
+        f"[ComfyUI-ProjectLogicNodeHelpers] Nodes loaded {NODE_VERSION}: "
         + ", ".join(NODE_CLASS_MAPPINGS.keys())
     )
 
 except Exception as e:
-    print(f"[ComfyUI-projectlogic] ⚠️  Failed to load nodes: {e}")
+    print(f"[ComfyUI-ProjectLogicNodeHelpers] ⚠️  Failed to load nodes: {e}")
     NODE_CLASS_MAPPINGS = {}
     NODE_DISPLAY_NAME_MAPPINGS = {}
 
