@@ -8,11 +8,13 @@ try:
     NODE_CLASS_MAPPINGS = _NODE_CLASS_MAPPINGS
 
     NODE_DISPLAY_NAME_MAPPINGS = {
-        "ProjectLogic": versioned_display_name(f"{PREFIX} Project Logic"),
+        "ProjectLogic": versioned_display_name(f"{PREFIX} Project Hub"),
         "ProjectLogicExtract": versioned_display_name(f"{PREFIX} Project Logic Extract"),
         "ProjectLogicRouterMaster": versioned_display_name(f"{PREFIX} Project Logic Router Master"),
         "ProjectLogicRouterSlave": versioned_display_name(f"{PREFIX} Project Logic Router Slave"),
         "ProjectLogicPreview": versioned_display_name(f"{PREFIX} Project Logic Preview"),
+        "ProjectLogicPack": versioned_display_name(f"{PREFIX} Pack Noodles"),
+        "ProjectLogicUnpack": versioned_display_name(f"{PREFIX} Unpack Noodles"),
     }
 
     WEB_DIRECTORY = "./web"

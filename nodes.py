@@ -37,6 +37,8 @@ from .paths import (
 CATEGORY = "projectlogic"
 
 MAX_SWITCH_INPUTS = 16
+MAX_GROUP_SLOTS = 16
+GROUP_TYPE = "PL_GROUP"
 
 # Hub config keys read from the submitted prompt to rebuild the bundle.
 CONFIG_FIELDS = (
@@ -394,10 +396,87 @@ class ProjectLogicPreview:
         return {"ui": {"text": [text]}, "result": (text,)}
 
 
+# --------------------------------------------------------------------------- #
+# Node 6 / 7 — Pack / Unpack (carry several labelled noodles on one wire)
+# --------------------------------------------------------------------------- #
+
+class ProjectLogicPack:
+    """Bundle several labelled ANY inputs into one ``PL_GROUP`` noodle.
+
+    Labels (one per input slot) are managed in JS — typed manually or, with
+    ``auto_label``, derived from each connected source's type. The bundle carries
+    ``{labels, values}`` so an Unpack node can restore named outputs, even after
+    being routed through a Router Slave.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = {}
+        for i in range(1, MAX_GROUP_SLOTS + 1):
+            optional[f"in_{i}"] = (ANY,)
+        return {
+            "required": {
+                "auto_label": ("BOOLEAN", {"default": True, "tooltip": "Label each input from the connected source's type."}),
+                "labels_json": ("STRING", {"default": "[]"}),  # JS-managed
+            },
+            "optional": optional,
+        }
+
+    RETURN_TYPES = (GROUP_TYPE,)
+    RETURN_NAMES = ("group",)
+    FUNCTION = "pack"
+    CATEGORY = CATEGORY
+
+    def pack(self, auto_label=True, labels_json="[]", **kwargs):
+        try:
+            labels = json.loads(labels_json)
+        except (ValueError, TypeError):
+            labels = []
+        if not isinstance(labels, list):
+            labels = []
+
+        values = []
+        for i, lbl in enumerate(labels):
+            # JS renames slots to labels; fall back to the positional name.
+            v = kwargs.get(lbl)
+            if v is None:
+                v = kwargs.get(f"in_{i + 1}")
+            values.append(v)
+        return ({"labels": labels, "values": values},)
+
+
+class ProjectLogicUnpack:
+    """Restore the labelled noodles from a ``PL_GROUP`` bundle.
+
+    Output slots are renamed (in JS) to the bundle's labels — read upstream at
+    edit time and refreshed from the actual bundle after a run.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"group": (GROUP_TYPE,)}}
+
+    RETURN_TYPES = tuple(ANY for _ in range(MAX_GROUP_SLOTS))
+    RETURN_NAMES = tuple(f"out_{i}" for i in range(1, MAX_GROUP_SLOTS + 1))
+    FUNCTION = "unpack"
+    CATEGORY = CATEGORY
+
+    def unpack(self, group=None):
+        labels, values = [], []
+        if isinstance(group, dict):
+            labels = group.get("labels") or []
+            values = group.get("values") or []
+        out = list(values)[:MAX_GROUP_SLOTS]
+        out += [None] * (MAX_GROUP_SLOTS - len(out))
+        return {"ui": {"labels": [labels]}, "result": tuple(out)}
+
+
 NODE_CLASS_MAPPINGS = {
     "ProjectLogic": ProjectLogic,
     "ProjectLogicExtract": ProjectLogicExtract,
     "ProjectLogicRouterMaster": ProjectLogicRouterMaster,
     "ProjectLogicRouterSlave": ProjectLogicRouterSlave,
     "ProjectLogicPreview": ProjectLogicPreview,
+    "ProjectLogicPack": ProjectLogicPack,
+    "ProjectLogicUnpack": ProjectLogicUnpack,
 }

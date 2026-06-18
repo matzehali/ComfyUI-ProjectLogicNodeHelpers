@@ -32,7 +32,7 @@ with a popup). It has **no output noodle** and consumers have **no project input
 Extract / Preview read the hub's settings straight from the submitted **prompt** at run
 time, and the router reads the hub's pass list in the editor. Nothing to wire.
 
-### Project Logic (hub)
+### Project Hub
 Inputs: `project_path`, `shot` (dropdown of subfolders), `plate_clip` (dropdown of
 detected image sequences/movies), `global_seed` (with the fixed/increment/randomize
 control), `default_template`, `output_template`, and a dynamic **pass-line editor**
@@ -62,6 +62,21 @@ A wireless "active pass" router so one dropdown reroutes the whole graph.
   input to the output**. Renaming a master's `router_id` **carries only the slaves
   explicitly on the old id** (NaN/other slaves are left alone); if a slave's master
   disappears it stays red and reconnects automatically if that id returns.
+
+### Pack Noodles / Unpack Noodles
+Carry several labelled noodles on a single wire — e.g. to route a whole group through
+one Router Slave.
+
+* **Pack Noodles** — auto-growing ANY inputs, each with a label (typed in the inline
+  editor, or auto-filled from the connected source's type when `auto_label` is on).
+  Outputs one `PL_GROUP`.
+* **Unpack Noodles** — takes a `PL_GROUP` and exposes one output **per label**. Labels
+  are read upstream at edit time (tracing back through reroutes and a Router Slave to the
+  Pack node) so you can wire before running, and refreshed from the bundle after a run.
+
+```
+[Pack: color/alpha/depth] → group → [Router Slave] → group → [Unpack → color, alpha, depth]
+```
 
 ### Project Logic Preview
 Shows the resolved bundle (seq path / dir / file / frame count per pass) **inline on
