@@ -37,7 +37,11 @@ COMMON_TYPES = [
 COMMON_EXTS = ["exr", "png", "jpg", "tiff", "webp", "mov", "mp4"]
 KINDS = ["sequence", "movie"]
 
-MOVIE_EXTS = {".mov", ".mp4", ".mkv", ".avi", ".mxf"}
+MOVIE_EXTS = {".mov", ".mp4", ".mkv", ".avi", ".mxf", ".m4v", ".mpg", ".mpeg", ".webm"}
+IMAGE_EXTS = {
+    ".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx",
+    ".webp", ".tga", ".bmp", ".hdr", ".gif",
+}
 _FRAME_RE = re.compile(r"#+")
 _SEQ_FILE_RE = re.compile(r"^(.*?)(\d+)(\.[^.]+)$")
 
@@ -164,6 +168,8 @@ def scan_sequences(folder: str, recursive: bool = True):
                 rel = f if rel_dir == "." else os.path.join(rel_dir, f)
                 results.add(rel)
                 continue
+            if ext not in IMAGE_EXTS:
+                continue  # not a recognised image-sequence format
             m = _SEQ_FILE_RE.match(f)
             if m:
                 prefix, digits, e = m.groups()
