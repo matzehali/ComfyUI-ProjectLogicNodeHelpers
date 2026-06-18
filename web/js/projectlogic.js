@@ -102,17 +102,39 @@ function projectPath(node) {
   return v;
 }
 
+// Set a combo's options to a fresh scan; reset the selection if the current
+// value no longer exists (so a stale shot/plate becomes unselected, not kept).
+function applyScan(w, values) {
+  w.type = "combo";
+  w.options = w.options || {};
+  w.options.values = ["", ...values];
+  if (!values.includes(w.value)) w.value = ""; // reset stale selection
+}
+
+function startResolving(node) {
+  node._plResolving = (node._plResolving || 0) + 1;
+  node.setDirtyCanvas?.(true, true);
+}
+function endResolving(node) {
+  node._plResolving = Math.max(0, (node._plResolving || 1) - 1);
+  node.setDirtyCanvas?.(true, true);
+}
+
 async function refreshShots(node) {
   const shotW = getWidget(node, "shot");
   if (!shotW) return;
   const token = (node._plShotReq = (node._plShotReq || 0) + 1);
-  const data = await fetchJSON(
-    `/projectlogic/subfolders?path=${encodeURIComponent(projectPath(node))}`,
-  );
-  if (token !== node._plShotReq) return; // a newer scan superseded this one
-  asCombo(shotW, data?.folders || []);
-  notifyChange();
-  node.setDirtyCanvas?.(true, true);
+  startResolving(node);
+  try {
+    const data = await fetchJSON(
+      `/projectlogic/subfolders?path=${encodeURIComponent(projectPath(node))}`,
+    );
+    if (token !== node._plShotReq) return; // a newer scan superseded this one
+    if (Array.isArray(data?.folders)) applyScan(shotW, data.folders);
+    notifyChange();
+  } finally {
+    endResolving(node);
+  }
 }
 
 async function refreshPlates(node) {
@@ -122,13 +144,41 @@ async function refreshPlates(node) {
   const root = projectPath(node).replace(/[\\/]+$/, "");
   const shotDir = root && shotW.value ? `${root}/${shotW.value}` : root;
   const token = (node._plPlateReq = (node._plPlateReq || 0) + 1);
-  const data = await fetchJSON(
-    `/projectlogic/sequences?path=${encodeURIComponent(shotDir)}`,
-  );
-  if (token !== node._plPlateReq) return;
-  asCombo(plateW, ["", ...(data?.sequences || [])]);
-  notifyChange();
-  node.setDirtyCanvas?.(true, true);
+  startResolving(node);
+  try {
+    const data = await fetchJSON(
+      `/projectlogic/sequences?path=${encodeURIComponent(shotDir)}`,
+    );
+    if (token !== node._plPlateReq) return;
+    if (Array.isArray(data?.sequences)) applyScan(plateW, data.sequences);
+    notifyChange();
+  } finally {
+    endResolving(node);
+  }
+}
+
+// A small animated spinner while the node is resolving names.
+function installSpinner(node) {
+  const prev = node.onDrawForeground;
+  node.onDrawForeground = function (ctx) {
+    prev?.apply(this, arguments);
+    if (!this._plResolving || this.flags?.collapsed) return;
+    const cx = this.size[0] - 16;
+    const cy = 12;
+    const a = (Date.now() / 150) % (Math.PI * 2);
+    ctx.save();
+    ctx.strokeStyle = "#66ccff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 6, a, a + Math.PI * 1.5);
+    ctx.stroke();
+    ctx.fillStyle = "#9cf";
+    ctx.font = "9px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("resolving…", cx - 12, cy + 3);
+    ctx.restore();
+    requestAnimationFrame(() => this.setDirtyCanvas?.(true, true));
+  };
 }
 
 // --------------------------------------------------------------------------- //
@@ -170,6 +220,7 @@ function setupProjectNode(node) {
 
   asCombo(shotW, []);
   asCombo(plateW, [""]);
+  installSpinner(node);
 
   // Path edits are debounced so the scan fires only once typing settles.
   const debouncedScan = debounce(
