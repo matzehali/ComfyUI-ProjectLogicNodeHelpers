@@ -23,6 +23,10 @@ export function hideWidget(w) {
   if (!w) return;
   w.hidden = true;
   w.computeSize = () => [0, -4];
+  // Multiline / DOM-backed widgets keep an HTML element that ignores the canvas
+  // collapse — hide it explicitly so JSON textareas etc. disappear.
+  const el = w.inputEl || w.element;
+  if (el && el.style) el.style.display = "none";
 }
 
 // Static-list combo (values supplied as an array).
