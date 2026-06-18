@@ -97,8 +97,12 @@ the node** after a run — no separate Display node needed.
   value is resolved by tracing the link upstream (through reroutes) to the source node's
   widget — both in the editor (to drive the dropdowns, and reflected back into the
   widget) and at run time (read from the prompt) so paths stay correct.
-- `framecount` reflects the **selected pass's own** length, not the plate's:
-  sequences are counted by globbing their `####` files; **stills = 1**; **movies are
-  read via `ffprobe`** (the container's reported frame count, fast). If `ffprobe`
-  isn't found, extracting a movie pass raises an error asking you to install ffmpeg
-  (`brew install ffmpeg`, or `pip install static-ffmpeg`). No start/end range.
+- `framecount` is the project's **single base length**, read from the base clip
+  (`plate_clip`, else the `base` pass) and used for **every** pass — because passes
+  are created at the base length, they don't exist yet at setup. Sequences count
+  their `####` files; a movie base is read via `ffprobe` (container `nb_frames`, fast;
+  missing ffmpeg raises asking you to install it — `brew install ffmpeg` or
+  `pip install static-ffmpeg`).
+- **Model-length padding** on the hub: `frame_min` (minimum), `frame_multiple` (round
+  the base length up to this), `frame_offset` (add after). E.g. LTX 8n+1 → multiple 8,
+  offset 1. `framecount` is the padded value; defaults (1/0/0) leave it unchanged.

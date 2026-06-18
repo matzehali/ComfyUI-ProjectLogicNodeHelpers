@@ -31,6 +31,7 @@ from .paths import (
     OUTPUT_TEMPLATE,
     count_sequence,
     frame_count_for,
+    pad_frames,
     render_template,
     split_path,
 )
@@ -45,6 +46,7 @@ GROUP_TYPE = "PL_GROUP"
 CONFIG_FIELDS = (
     "project_path", "shot", "global_seed",
     "default_template", "output_template", "plate_clip", "passes_json",
+    "frame_min", "frame_multiple", "frame_offset",
 )
 
 
@@ -90,7 +92,8 @@ def _pass_entry(template, root, shot, type_, ext, seed, kind):
 
 def build_bundle(project_path="", shot="", global_seed=0,
                  default_template=DEFAULT_TEMPLATE, output_template=OUTPUT_TEMPLATE,
-                 plate_clip="", passes_json=_DEFAULT_PASSES):
+                 plate_clip="", passes_json=_DEFAULT_PASSES,
+                 frame_min=0, frame_multiple=1, frame_offset=0):
     """Build the PROJECT_LOGIC bundle from raw config.
 
     Shared by the hub node and by consumers rebuilding from a broadcast config.
@@ -149,7 +152,28 @@ def build_bundle(project_path="", shot="", global_seed=0,
         "default_template": default_template,
         "output_template": output_template,
         "passes": passes,
+        "pad": {
+            "min": int(frame_min or 0),
+            "multiple": int(frame_multiple or 1),
+            "offset": int(frame_offset or 0),
+        },
     }
+
+
+def base_frame_count(bundle, padded=True):
+    """The project's single length, read from the base clip (plate, else 'base').
+
+    All passes are created at this length, so it drives every framecount.
+    """
+    passes = bundle.get("passes", {})
+    src = passes.get("plate") or {}
+    if not src.get("sequence_path"):
+        src = passes.get("base") or {}
+    raw = frame_count_for(src.get("sequence_path", ""), src.get("kind", "sequence"))
+    if not padded:
+        return raw
+    pad = bundle.get("pad", {})
+    return pad_frames(raw, pad.get("min", 0), pad.get("multiple", 1), pad.get("offset", 0))
 
 
 def _prompt_field(prompt, ins, name):
@@ -217,7 +241,10 @@ class ProjectLogic:
                 "output_template": ("STRING", {"default": OUTPUT_TEMPLATE, "tooltip": "Final-output layout (own subfolder, includes {seed})."}),
             },
             "optional": {
-                "plate_clip": ("STRING", {"default": "", "tooltip": "Main base clip inside the shot folder (sequence pattern or movie). Relative to the shot folder unless absolute."}),
+                "plate_clip": ("STRING", {"default": "", "tooltip": "Main base clip inside the shot folder (sequence pattern or movie). Its length drives every framecount."}),
+                "frame_min": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFF, "tooltip": "Model length padding: minimum frame count."}),
+                "frame_multiple": ("INT", {"default": 1, "min": 1, "max": 4096, "tooltip": "Round the base length UP to a multiple of this (e.g. 8 for LTX)."}),
+                "frame_offset": ("INT", {"default": 0, "min": -64, "max": 64, "tooltip": "Add after rounding (e.g. 1 for LTX's 8n+1)."}),
                 # Single-line + JS-hidden; the pass-line editor is the real UI.
                 "passes_json": ("STRING", {"default": _DEFAULT_PASSES}),
             },
@@ -234,7 +261,8 @@ class ProjectLogic:
         return float("nan")
 
     def build(self, project_path, shot, global_seed, default_template,
-              output_template, plate_clip="", passes_json=_DEFAULT_PASSES):
+              output_template, plate_clip="", passes_json=_DEFAULT_PASSES,
+              frame_min=0, frame_multiple=1, frame_offset=0):
         return {"ui": {}}
 
 
@@ -271,7 +299,9 @@ class ProjectLogicExtract:
 
         entry = _pass_for(bundle, pass_name)
         seq = entry.get("sequence_path", "")
-        fc = frame_count_for(seq, entry.get("kind", "sequence"))
+        # Length is the project's single base length (drives all passes), padded
+        # to the configured model needs.
+        fc = base_frame_count(bundle)
 
         return (
             seq,                          # full_path  (loader-ready, incl. ext)
@@ -383,18 +413,21 @@ class ProjectLogicPreview:
             text = "(no project — add a Project Logic node)"
             return {"ui": {"text": [text]}, "result": (text,)}
 
+        try:
+            raw = base_frame_count(bundle, padded=False)
+            padded = base_frame_count(bundle, padded=True)
+            length = f"base frames: {raw}" + (f"  ->  padded {padded}" if padded != raw else "")
+        except RuntimeError:
+            length = "base frames: ? (install ffmpeg)"
+
         lines = [
             f"root: {bundle.get('root', '')}",
             f"shot: {bundle.get('shot', '')}   seed: {bundle.get('seed', '')}",
+            length,
             "",
         ]
         for name, p in bundle.get("passes", {}).items():
-            try:
-                n = frame_count_for(p.get("sequence_path", ""), p.get("kind", "sequence"))
-                extra = f"   frames={n}"
-            except RuntimeError:
-                extra = "   frames=? (install ffmpeg)"
-            lines.append(f"[{name}]{extra}")
+            lines.append(f"[{name}]  ({p.get('kind', 'sequence')})")
             lines.append(f"  seq : {p.get('sequence_path', '')}")
             lines.append(f"  dir : {p.get('directory', '')}")
             lines.append(f"  file: {p.get('filename', '')}  (.{p.get('ext', '')})")
