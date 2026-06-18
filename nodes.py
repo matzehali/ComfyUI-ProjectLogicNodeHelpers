@@ -89,7 +89,7 @@ class ProjectLogic:
             "required": {
                 "project_path": ("STRING", {"default": "", "tooltip": "VFX root folder containing shot subfolders."}),
                 "shot": ("STRING", {"default": "", "tooltip": "Shot name / number (subfolder of project_path)."}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "tooltip": "Seed embedded into final output filenames."}),
+                "global_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "tooltip": "Global seed embedded into final output filenames ({seed} token)."}),
                 "default_template": ("STRING", {"default": DEFAULT_TEMPLATE, "tooltip": "Default path layout. Tokens: {root} {shot} {type} {ext} {seed}; #### = frame padding."}),
                 "output_template": ("STRING", {"default": OUTPUT_TEMPLATE, "tooltip": "Final-output layout (own subfolder, includes {seed})."}),
             },
@@ -109,9 +109,11 @@ class ProjectLogic:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")  # paths/counts depend on disk; always re-evaluate.
 
-    def build(self, project_path, shot, seed, default_template, output_template,
+    def build(self, project_path, shot, global_seed, default_template, output_template,
               plate_clip="", passes_json=_DEFAULT_PASSES):
         import os
+
+        seed = global_seed
 
         root = (project_path or "").rstrip("/\\")
         shot = (shot or "").strip()

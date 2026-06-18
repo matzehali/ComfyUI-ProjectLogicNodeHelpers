@@ -77,6 +77,17 @@ function typesForNode(node) {
   return FALLBACK_TYPES.slice();
 }
 
+// Collect the router_id of every Router Master currently in the graph.
+function listMasterIds() {
+  const out = [];
+  for (const n of app.graph?._nodes || []) {
+    if (n.comfyClass !== "ProjectLogicRouterMaster") continue;
+    const v = getWidget(n, "router_id")?.value;
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
 // --------------------------- master broadcast ------------------------------ //
 function broadcast(id, val) {
   ACTIVE[id] = val;
@@ -146,6 +157,19 @@ function setupFollower(node) {
   const actW = getWidget(node, "active_type");
   hideWidget(slotW);
   hideWidget(actW);
+
+  // router_id is a live dropdown of every Router Master id in the graph.
+  if (idW) {
+    idW.type = "combo";
+    idW.options = idW.options || {};
+    idW.options.values = () => {
+      const ids = listMasterIds();
+      if (idW.value && !ids.includes(idW.value)) ids.unshift(idW.value);
+      if (!ids.length) ids.push(idW.value || "main");
+      return ids;
+    };
+    if (!idW.value) idW.value = "main";
+  }
 
   function configure() {
     const types = typesForNode(node);

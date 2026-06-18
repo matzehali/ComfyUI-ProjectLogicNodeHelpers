@@ -107,9 +107,17 @@ async function refreshPlates(node) {
   node.setDirtyCanvas?.(true, true);
 }
 
-function hookRefresh(node) {
+function setupProjectNode(node) {
   const projectW = getWidget(node, "project_path");
   const shotW = getWidget(node, "shot");
+  const plateW = getWidget(node, "plate_clip");
+
+  // Convert to dropdowns immediately so they always render as combos, even
+  // before (or without) a successful folder scan.
+  asCombo(shotW, []);
+  asCombo(plateW, [""]);
+
+  // project_path edited -> repopulate shots (then plates for the first shot).
   if (projectW) {
     const prev = projectW.callback;
     projectW.callback = function () {
@@ -117,6 +125,7 @@ function hookRefresh(node) {
       refreshShots(node).then(() => refreshPlates(node));
     };
   }
+  // shot changed -> repopulate plate clips for that shot.
   if (shotW) {
     const prev = shotW.callback;
     shotW.callback = function () {
@@ -124,9 +133,19 @@ function hookRefresh(node) {
       refreshPlates(node);
     };
   }
-  // Manual refresh buttons.
+
+  // Manual refresh buttons (fallback / explicit rescan).
   node.addWidget("button", "↻ scan shots", null, () => refreshShots(node));
   node.addWidget("button", "↻ scan plate clips", null, () => refreshPlates(node));
+
+  // Initial population, and again after a saved workflow loads.
+  const doRefresh = () => refreshShots(node).then(() => refreshPlates(node));
+  setTimeout(doRefresh, 50);
+  const onCfg = node.onConfigure;
+  node.onConfigure = function () {
+    onCfg?.apply(this, arguments);
+    setTimeout(doRefresh, 50);
+  };
 }
 
 // --------------------------------------------------------------------------- //
@@ -286,9 +305,16 @@ app.registerExtension({
 
   async nodeCreated(node) {
     if (node.comfyClass !== "ProjectLogic") return;
-    buildPassEditor(node);
-    hookRefresh(node);
-    // Populate dropdowns from any pre-filled project_path.
-    setTimeout(() => refreshShots(node).then(() => refreshPlates(node)), 50);
+    // Isolate the two subsystems so one failing never blocks the other.
+    try {
+      setupProjectNode(node);
+    } catch (e) {
+      console.error("[projectlogic] shot/plate dropdown setup failed", e);
+    }
+    try {
+      buildPassEditor(node);
+    } catch (e) {
+      console.error("[projectlogic] pass editor setup failed", e);
+    }
   },
 });
