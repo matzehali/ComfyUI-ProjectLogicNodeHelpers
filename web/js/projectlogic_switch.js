@@ -114,23 +114,27 @@ function setupMaster(node) {
 }
 
 // --------------------------- follower routing ------------------------------ //
-// Slots ARE the pass types: rename each input slot to its type name.
+// Slot NAMES stay input_1..input_N (matching INPUT_TYPES, so links survive
+// save/load); the pass type is shown via the slot label, and the slot->type order
+// is stored in slot_types for Python routing.
 function reconcileInputs(node, types) {
   const k = Math.min(types.length, MAX_INPUTS);
-  while ((node.inputs?.length || 0) > k) {
-    node.removeInput(node.inputs.length - 1);
+  for (let j = MAX_INPUTS; j > k; j--) {
+    const idx = node.inputs?.findIndex((i) => i.name === `input_${j}`);
+    if (idx != null && idx >= 0) node.removeInput(idx);
   }
-  for (let i = 0; i < k; i++) {
-    let slot = node.inputs?.[i];
+  for (let j = 1; j <= k; j++) {
+    let slot = node.inputs?.find((i) => i.name === `input_${j}`);
     if (!slot) {
-      node.addInput(types[i], "*");
+      node.addInput(`input_${j}`, "*");
       slot = node.inputs[node.inputs.length - 1];
     }
-    slot.name = types[i];
-    slot.label = types[i];
-    slot.localized_name = types[i];
+    slot.label = types[j - 1];          // display only — name stays input_j
+    slot.localized_name = types[j - 1];
     slot.type = "*";
   }
+  const w = getWidget(node, "slot_types");
+  if (w) w.value = JSON.stringify(types.slice(0, k));
   node.setSize?.(node.computeSize());
 }
 
@@ -138,7 +142,8 @@ function configureSlave(node) {
   const masterW = getWidget(node, "master");
   const ridW = getWidget(node, "router_id");
   const actW = getWidget(node, "active_type");
-  reconcileInputs(node, consumerTypes(node));
+  const types = consumerTypes(node);
+  if (types.length) reconcileInputs(node, types); // never wipe when project unknown
 
   const id = ridW?.value || "";
   const m = id ? masterById(id) : null;
@@ -176,7 +181,9 @@ function installActiveLink(node) {
     if (!this.outputs?.length) return;
     const active = getWidget(this, "active_type")?.value;
     if (!active) return;
-    const inSlot = this.inputs?.findIndex((i) => i.name === active);
+    const idx = consumerTypes(this).indexOf(active);
+    if (idx < 0) return;
+    const inSlot = this.inputs?.findIndex((i) => i.name === `input_${idx + 1}`);
     if (inSlot == null || inSlot < 0) return;
 
     const ip = this.getConnectionPos(true, inSlot);
@@ -206,6 +213,7 @@ function setupFollower(node) {
   const masterW = getWidget(node, "master");
   const ridW = getWidget(node, "router_id");
   hideWidget(getWidget(node, "active_type"));
+  hideWidget(getWidget(node, "slot_types"));
   hideWidget(ridW);
 
   // master: dropdown of master titles (value resolved to the master's node id).

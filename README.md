@@ -61,7 +61,7 @@ A wireless "active pass" router so one dropdown reroutes the whole graph.
   **unique id**; `label` is a free, editable title (**duplicates are fine**). `active`
   is a dropdown of the project's passes. No output noodles.
 * **Router Slave** — a mux whose `ANY` input slots **are the project's pass types**
-  (each slot is named after a pass). The **`master` dropdown** lists master titles
+  (each slot is labelled with a pass; slot names stay input_N so links survive save/load). The **`master` dropdown** lists master titles
   (same-named masters shown as `title (id)`) and stores the master's **unique id**, so
   the link survives renames and never confuses two equally-named masters. Outputs the
   input matching the master's active type and **draws a link from the active input to

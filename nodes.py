@@ -334,8 +334,9 @@ class ProjectLogicRouterMaster:
 class ProjectLogicRouterSlave:
     """Routes one of its labelled inputs to the output based on the active pass.
 
-    The JS layer renames each input slot to a project pass type, so an input
-    connected to the active pass arrives in ``kwargs`` keyed by that type name.
+    Input slots keep stable names (``input_1..input_N``, matching INPUT_TYPES so
+    links survive save/load) and are *labelled* with the pass type in JS.
+    ``slot_types`` carries the slot->type order so Python can route by active type.
     ``master`` shows the chosen master's title; ``router_id`` stores that master's
     unique node id (the real link); ``active_type`` mirrors the master's selection.
     """
@@ -347,11 +348,12 @@ class ProjectLogicRouterSlave:
             optional[f"input_{i}"] = (ANY,)
         return {
             "required": {
-                # master: visible title picker (JS combo). router_id: the resolved
-                # master node id (JS-hidden). Fresh slaves start unconnected.
+                # master: visible title picker (JS combo). The rest are JS-managed
+                # and hidden. Fresh slaves start unconnected.
                 "master": ("STRING", {"default": ""}),
                 "router_id": ("STRING", {"default": ""}),
                 "active_type": ("STRING", {"default": ""}),
+                "slot_types": ("STRING", {"default": "[]"}),
             },
             "optional": optional,
         }
@@ -361,11 +363,20 @@ class ProjectLogicRouterSlave:
     FUNCTION = "route"
     CATEGORY = CATEGORY
 
-    def route(self, master="", router_id="", active_type="", **kwargs):
-        # Slots are renamed to pass types, so the active input arrives by name.
-        if active_type and kwargs.get(active_type) is not None:
-            return (kwargs[active_type],)
-        for v in kwargs.values():  # fall back to the first connected input
+    def route(self, master="", router_id="", active_type="", slot_types="[]", **kwargs):
+        try:
+            types = json.loads(slot_types)
+            if not isinstance(types, list):
+                types = []
+        except (ValueError, TypeError):
+            types = []
+
+        if active_type and active_type in types:
+            v = kwargs.get(f"input_{types.index(active_type) + 1}")
+            if v is not None:
+                return (v,)
+        for i in range(1, MAX_SWITCH_INPUTS + 1):  # fall back to first connected
+            v = kwargs.get(f"input_{i}")
             if v is not None:
                 return (v,)
         return (None,)
