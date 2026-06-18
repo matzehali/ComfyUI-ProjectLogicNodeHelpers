@@ -30,6 +30,7 @@ from .paths import (
     DEFAULT_TEMPLATE,
     OUTPUT_TEMPLATE,
     count_sequence,
+    frame_count_for,
     render_template,
     split_path,
 )
@@ -270,9 +271,7 @@ class ProjectLogicExtract:
 
         entry = _pass_for(bundle, pass_name)
         seq = entry.get("sequence_path", "")
-        fc = entry.get("frame_count")
-        if fc is None:
-            _, fc = count_sequence(seq)
+        fc = frame_count_for(seq, entry.get("kind", "sequence"))
 
         return (
             seq,                          # full_path  (loader-ready, incl. ext)
@@ -390,7 +389,11 @@ class ProjectLogicPreview:
             "",
         ]
         for name, p in bundle.get("passes", {}).items():
-            extra = f"   frames={p['frame_count']}" if "frame_count" in p else ""
+            try:
+                n = frame_count_for(p.get("sequence_path", ""), p.get("kind", "sequence"))
+                extra = f"   frames={n}"
+            except RuntimeError:
+                extra = "   frames=? (install ffmpeg)"
             lines.append(f"[{name}]{extra}")
             lines.append(f"  seq : {p.get('sequence_path', '')}")
             lines.append(f"  dir : {p.get('directory', '')}")

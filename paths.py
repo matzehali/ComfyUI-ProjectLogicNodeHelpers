@@ -19,6 +19,8 @@ from __future__ import annotations
 import glob
 import os
 import re
+import shutil
+import subprocess
 
 # --------------------------------------------------------------------------- #
 # Templates / vocab shared with the node layer
@@ -131,6 +133,78 @@ def count_sequence(seq_path: str):
     )
     matches = [m for m in glob.glob(glob_pat) if validate.match(m)]
     return seq_path, len(matches)
+
+
+# --------------------------------------------------------------------------- #
+# Movie frame count (via ffprobe — trusts the container, no full decode)
+# --------------------------------------------------------------------------- #
+
+def _ffprobe_exe():
+    exe = shutil.which("ffprobe")
+    if exe:
+        return exe
+    # Optional pip-provided binaries (static-ffmpeg) as a fallback.
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()  # registers ffmpeg + ffprobe on PATH
+        return shutil.which("ffprobe")
+    except Exception:
+        return None
+
+
+def _ffprobe(exe, path, entries):
+    try:
+        res = subprocess.run(
+            [exe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", entries, "-of",
+             "default=nokey=1:noprint_wrappers=1", path],
+            capture_output=True, text=True, timeout=60,
+        )
+        return res.stdout.strip()
+    except Exception:
+        return ""
+
+
+def movie_frame_count(path: str) -> int:
+    """Frame count of a movie via ffprobe. Raises if ffprobe is unavailable.
+
+    Reads the container's reported ``nb_frames`` (fast, no decode); if the
+    container doesn't report it, derives ``duration * avg_frame_rate``.
+    """
+    if not path or not os.path.isfile(path):
+        return 0
+    exe = _ffprobe_exe()
+    if not exe:
+        raise RuntimeError(
+            "ffprobe not found — movie frame counting needs ffmpeg. Install it "
+            "(e.g. `brew install ffmpeg`) or `pip install static-ffmpeg`."
+        )
+
+    val = _ffprobe(exe, path, "stream=nb_frames")
+    if val.isdigit() and int(val) > 0:
+        return int(val)
+
+    # Container didn't report nb_frames — derive from duration * fps (no decode).
+    dur = _ffprobe(exe, path, "format=duration")
+    rate = _ffprobe(exe, path, "stream=avg_frame_rate")
+    try:
+        num, den = (rate.split("/") + ["1"])[:2]
+        fps = float(num) / float(den) if float(den) else 0.0
+        seconds = float(dur)
+        if seconds > 0 and fps > 0:
+            return round(seconds * fps)
+    except (ValueError, ZeroDivisionError):
+        pass
+    return 0
+
+
+def frame_count_for(path: str, kind: str = "sequence") -> int:
+    """Frame count appropriate to the pass kind (movie via ffprobe; still = 1)."""
+    if kind == "movie":
+        return movie_frame_count(path)
+    if kind == "still":
+        return 1 if (path and os.path.isfile(path)) else 0
+    return count_sequence(path)[1]
 
 
 # --------------------------------------------------------------------------- #

@@ -97,4 +97,8 @@ the node** after a run — no separate Display node needed.
   value is resolved by tracing the link upstream (through reroutes) to the source node's
   widget — both in the editor (to drive the dropdowns, and reflected back into the
   widget) and at run time (read from the prompt) so paths stay correct.
-- `framecount` is a count only (globs the `####` pattern); no start/end range.
+- `framecount` reflects the **selected pass's own** length, not the plate's:
+  sequences are counted by globbing their `####` files; **stills = 1**; **movies are
+  read via `ffprobe`** (the container's reported frame count, fast). If `ffprobe`
+  isn't found, extracting a movie pass raises an error asking you to install ffmpeg
+  (`brew install ffmpeg`, or `pip install static-ffmpeg`). No start/end range.

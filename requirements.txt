@@ -1,0 +1,4 @@
+# Movie frame counting uses ffprobe. Prefer a system ffmpeg install
+# (e.g. `brew install ffmpeg`); static-ffmpeg provides a pip-installable
+# fallback that bundles ffmpeg + ffprobe binaries.
+static-ffmpeg
