@@ -31,11 +31,12 @@ OUTPUT_TEMPLATE = "{root}/{shot}/{shot}_output/{shot}_output.{seed}.####.{ext}"
 COMMON_TYPES = [
     "base", "mask", "depthmap", "normals", "motion",
     "matte", "beauty", "cryptomatte",
+    "firstframe", "middleframe", "lastframe",
     "PlateA", "PlateB", "PlateC",
     "custom", "none",
 ]
 COMMON_EXTS = ["exr", "png", "jpg", "tiff", "webp", "mov", "mp4"]
-KINDS = ["sequence", "movie"]
+KINDS = ["sequence", "still", "movie"]
 
 MOVIE_EXTS = {".mov", ".mp4", ".mkv", ".avi", ".mxf", ".m4v", ".mpg", ".mpeg", ".webm"}
 IMAGE_EXTS = {
@@ -67,8 +68,8 @@ def render_template(
 ) -> str:
     """Resolve ``template`` into a concrete path string.
 
-    For ``kind == "movie"`` the ``####`` frame placeholder (and any single
-    adjacent ``.``/``_`` separator) is stripped, yielding a single-file path.
+    For single-file kinds (``movie`` and ``still``) the ``####`` frame
+    placeholder (and any single adjacent ``.``/``_`` separator) is stripped.
     """
     root = (root or "").rstrip("/\\")
     out = (
@@ -79,7 +80,7 @@ def render_template(
         .replace("{ext}", ext or "")
         .replace("{seed}", str(seed))
     )
-    if kind == "movie":
+    if kind in ("movie", "still"):
         out = re.sub(r"[._]?#+", "", out)
     return _collapse_slashes(out)
 

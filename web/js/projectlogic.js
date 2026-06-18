@@ -17,11 +17,23 @@ import {
 const TYPE_OPTIONS = [
   "base", "mask", "depthmap", "normals", "motion",
   "matte", "beauty", "cryptomatte",
+  "firstframe", "middleframe", "lastframe",
   "PlateA", "PlateB", "PlateC",
   "custom", "none",
 ];
 const EXT_OPTIONS = ["exr", "png", "jpg", "tiff", "webp", "mov", "mp4"];
-const KIND_OPTIONS = ["sequence", "movie"];
+const MOVIE_EXTS = new Set(["mov", "mp4", "mkv", "avi", "mxf", "m4v", "mpg", "mpeg", "webm"]);
+const STILL_TYPES = new Set(["firstframe", "middleframe", "lastframe"]);
+
+const isMovieExt = (ext) => MOVIE_EXTS.has(String(ext || "").toLowerCase());
+// Valid kinds depend on the extension: movies are always "movie"; images can be
+// a "sequence" (####) or a single "still".
+const kindOptionsFor = (ext) => (isMovieExt(ext) ? ["movie"] : ["sequence", "still"]);
+
+const CONFIG_FIELDS = [
+  "project_path", "shot", "global_seed",
+  "default_template", "output_template", "plate_clip",
+];
 
 const CONFIG_FIELDS = [
   "project_path", "shot", "global_seed",
@@ -356,6 +368,8 @@ function buildPassEditor(node) {
 
       const typeSel = makeSelect(TYPE_OPTIONS, row.type, (v) => {
         row.type = v;
+        // firstframe/middleframe/lastframe default to still (image) / movie (mov ext).
+        if (STILL_TYPES.has(v)) row.kind = isMovieExt(row.ext) ? "movie" : "still";
         commit();
         render();
       });
@@ -375,12 +389,21 @@ function buildPassEditor(node) {
       line.appendChild(
         makeSelect(EXT_OPTIONS, row.ext, (v) => {
           row.ext = v;
+          if (isMovieExt(v)) {
+            row.kind = "movie"; // movie ext -> always movie
+          } else if (!["sequence", "still"].includes(row.kind)) {
+            // image ext -> default sequence (still for the still-types)
+            row.kind = STILL_TYPES.has(row.type) ? "still" : "sequence";
+          }
           commit();
+          render();
         }),
       );
 
+      const kindOpts = kindOptionsFor(row.ext);
+      if (!kindOpts.includes(row.kind)) row.kind = kindOpts[0];
       line.appendChild(
-        makeSelect(KIND_OPTIONS, row.kind, (v) => {
+        makeSelect(kindOpts, row.kind, (v) => {
           row.kind = v;
           commit();
         }),
