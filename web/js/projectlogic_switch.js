@@ -32,6 +32,25 @@ function listMasterIds() {
   return out;
 }
 
+// Ids of all OTHER masters (for uniqueness checks).
+function otherMasterIds(exclude) {
+  const ids = [];
+  for (const n of app.graph?._nodes || []) {
+    if (n.comfyClass !== "ProjectLogicRouterMaster" || n === exclude) continue;
+    const v = getWidget(n, "router_id")?.value;
+    if (v) ids.push(String(v));
+  }
+  return ids;
+}
+
+// Smallest positive integer id not used by another master.
+function nextMasterId(exclude) {
+  const taken = new Set(otherMasterIds(exclude));
+  let i = 1;
+  while (taken.has(String(i))) i++;
+  return String(i);
+}
+
 function reconfigureAllSlaves() {
   for (const n of app.graph?._nodes || []) {
     if (n.comfyClass === "ProjectLogicRouterSlave") configureSlave(n);
@@ -55,6 +74,12 @@ function setupMaster(node) {
   const actW = getWidget(node, "active");
   if (!idW || !actW) return;
 
+  // Give every master a unique id (never the old "main" default), so masters
+  // and slaves never collide on a shared preset.
+  if (!idW.value || idW.value === "main" || idW.value === "NaN" ||
+      otherMasterIds(node).includes(String(idW.value))) {
+    idW.value = nextMasterId(node);
+  }
   node._plRouterId = idW.value;
   comboFromFn(actW, () => consumerTypes(node), "base");
 
@@ -183,8 +208,8 @@ function setupFollower(node) {
   const idW = getWidget(node, "router_id");
   hideWidget(getWidget(node, "active_type"));
 
-  // router_id: dropdown of all Router Master ids.
-  comboFromFn(idW, listMasterIds, "main");
+  // router_id: dropdown of all Router Master ids; unconnected default is "NaN".
+  comboFromFn(idW, listMasterIds, "NaN");
 
   if (idW) {
     const prev = idW.callback;
@@ -206,25 +231,6 @@ function setupFollower(node) {
 // When the hub config changes, relabel every slave's inputs.
 window.addEventListener("projectlogic:changed", reconfigureAllSlaves);
 
-// A slave needs a master: create one if the graph has none. Returns the master.
-function ensureMaster(node) {
-  const existing = (app.graph?._nodes || []).find(
-    (n) => n.comfyClass === "ProjectLogicRouterMaster",
-  );
-  if (existing) return existing;
-  const LG = window.LiteGraph || globalThis.LiteGraph;
-  if (!LG?.createNode || !app.graph) return null;
-  const m = LG.createNode("ProjectLogicRouterMaster");
-  if (!m) {
-    console.warn("[projectlogic] could not create a Router Master");
-    return null;
-  }
-  m.pos = [(node.pos?.[0] || 0) - 300, node.pos?.[1] || 0];
-  app.graph.add(m);
-  setTimeout(reconfigureAllSlaves, 30); // let NaN slaves adopt the new master
-  return m;
-}
-
 // ----------------------------- registration -------------------------------- //
 app.registerExtension({
   name: "projectlogic.router",
@@ -235,8 +241,6 @@ app.registerExtension({
         setupMaster(node);
       } else if (node.comfyClass === "ProjectLogicRouterSlave") {
         setupFollower(node);
-        // Defer so a master from the same load settles before we add one.
-        setTimeout(() => ensureMaster(node), 120);
       }
     } catch (e) {
       console.error("[projectlogic] router setup failed", node.comfyClass, e);

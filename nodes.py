@@ -328,7 +328,9 @@ class ProjectLogicRouterSlave:
             optional[f"input_{i}"] = (ANY,)
         return {
             "required": {
-                "router_id": ("STRING", {"default": "main"}),
+                # Fresh slaves start unconnected ("NaN") so they never accidentally
+                # share a default id with a newly created master.
+                "router_id": ("STRING", {"default": "NaN"}),
                 "active_type": ("STRING", {"default": ""}),
             },
             "optional": optional,

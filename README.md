@@ -51,16 +51,17 @@ control), `default_template`, `output_template`, and a dynamic **pass-line edito
 ### Project Logic Router Master / Router Slave
 A wireless "active pass" router so one dropdown reroutes the whole graph.
 
-* **Router Master** — pick the active pass type for a `router_id`. `active` is a
-  dropdown of the project's passes. No output noodles. Different `router_id` values
-  drive independent router groups.
+* **Router Master** — pick the active pass type. Each master gets a **unique
+  `router_id`** on creation (1, 2, 3, … — editable, doubles as its label), never a
+  shared default. `active` is a dropdown of the project's passes. No output noodles.
 * **Router Slave** — a mux whose `ANY` input slots **are the project's pass types**
   (each slot is named after a pass); no manual slot config. `router_id` is a dropdown of
-  the masters in the graph. Outputs the input matching the master's active type, and
-  **draws a link from the active input to the output** so the live route is visible at a
-  glance. Adding a slave with no master present **auto-creates a master**; if none is
-  available the `router_id` shows **NaN in red**. Renaming a master's `router_id`
-  **carries its slaves along** so the routing doesn't break.
+  the masters in the graph and **starts at `NaN` (unconnected, shown red)** — you pick
+  the master explicitly, so a slave never auto-binds to a freshly created master.
+  Outputs the input matching the master's active type and **draws a link from the active
+  input to the output**. Renaming a master's `router_id` **carries only the slaves
+  explicitly on the old id** (NaN/other slaves are left alone); if a slave's master
+  disappears it stays red and reconnects automatically if that id returns.
 
 ### Project Logic Preview
 Shows the resolved bundle (seq path / dir / file / frame count per pass) **inline on
