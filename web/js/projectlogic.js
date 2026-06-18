@@ -35,11 +35,6 @@ const CONFIG_FIELDS = [
   "default_template", "output_template", "plate_clip",
 ];
 
-const CONFIG_FIELDS = [
-  "project_path", "shot", "global_seed",
-  "default_template", "output_template", "plate_clip",
-];
-
 // --------------------------------------------------------------------------- //
 // Local DOM helpers
 // --------------------------------------------------------------------------- //
