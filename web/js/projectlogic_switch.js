@@ -7,49 +7,44 @@ import {
 } from "./projectlogic_shared.js";
 
 // --------------------------------------------------------------------------- //
-// Active-pass broadcast router.
+// Active-pass broadcast router (Stamps-style identity).
 //
-//   ProjectLogicRouterMaster (master)  -- router_id -->  ProjectLogicRouterSlave (N)
-//
-// The master sets a shared "active type" for a router_id; every slave with that
-// router_id routes the matching labelled input to its output. Slot labels and
-// ordering come from the project's passes (broadcast or wired bundle).
+// A Router Master's identity is its **node id** (stable, unique); its `label` is a
+// free editable title (duplicates allowed). A Router Slave stores that node id in
+// `router_id` and picks it via a `master` dropdown that shows labels (duplicate
+// labels are disambiguated as "label (id)"). Renaming a master never breaks the
+// link, and same-named masters stay distinguishable.
 // --------------------------------------------------------------------------- //
 
 const MAX_INPUTS = 16;
+const NONE = "— none —";
 
-// router_id -> active type, shared across the graph.
+// master id -> active type, shared across the graph.
 const ACTIVE = {};
 
-// router_id of every Router Master in the graph (empty if none exist).
-function listMasterIds() {
-  const out = [];
-  for (const n of app.graph?._nodes || []) {
-    if (n.comfyClass !== "ProjectLogicRouterMaster") continue;
-    const v = getWidget(n, "router_id")?.value;
-    if (v && v !== "NaN" && !out.includes(v)) out.push(v);
-  }
-  return out;
+// ------------------------------- masters ----------------------------------- //
+function masterNodes() {
+  return (app.graph?._nodes || []).filter(
+    (n) => n.comfyClass === "ProjectLogicRouterMaster",
+  );
 }
 
-// Ids of all OTHER masters (for uniqueness checks).
-function otherMasterIds(exclude) {
-  const ids = [];
-  for (const n of app.graph?._nodes || []) {
-    if (n.comfyClass !== "ProjectLogicRouterMaster" || n === exclude) continue;
-    const v = getWidget(n, "router_id")?.value;
-    if (v) ids.push(String(v));
+// [{id, label, display}], display disambiguated when labels repeat.
+function masterList() {
+  const ms = masterNodes().map((n) => ({
+    id: String(n.id),
+    label: (getWidget(n, "label")?.value || "").trim(),
+  }));
+  const counts = {};
+  for (const m of ms) if (m.label) counts[m.label] = (counts[m.label] || 0) + 1;
+  for (const m of ms) {
+    if (!m.label) m.display = `router ${m.id}`;
+    else m.display = counts[m.label] > 1 ? `${m.label} (${m.id})` : m.label;
   }
-  return ids;
+  return ms;
 }
-
-// Smallest positive integer id not used by another master.
-function nextMasterId(exclude) {
-  const taken = new Set(otherMasterIds(exclude));
-  let i = 1;
-  while (taken.has(String(i))) i++;
-  return String(i);
-}
+const masterById = (id) => masterList().find((m) => m.id === String(id));
+const masterByDisplay = (d) => masterList().find((m) => m.display === d);
 
 function reconfigureAllSlaves() {
   for (const n of app.graph?._nodes || []) {
@@ -70,43 +65,25 @@ function broadcast(id, val) {
 }
 
 function setupMaster(node) {
-  const idW = getWidget(node, "router_id");
+  const labelW = getWidget(node, "label");
   const actW = getWidget(node, "active");
-  if (!idW || !actW) return;
+  if (!actW) return;
 
-  // Give every master a unique id (never the old "main" default), so masters
-  // and slaves never collide on a shared preset.
-  if (!idW.value || idW.value === "main" || idW.value === "NaN" ||
-      otherMasterIds(node).includes(String(idW.value))) {
-    idW.value = nextMasterId(node);
-  }
-  node._plRouterId = idW.value;
   comboFromFn(actW, () => consumerTypes(node), "base");
+  const myId = () => String(node.id);
 
   const prevAct = actW.callback;
   actW.callback = function () {
     prevAct?.apply(this, arguments);
-    broadcast(idW.value, actW.value);
+    broadcast(myId(), actW.value);
   };
-  const prevId = idW.callback;
-  idW.callback = function () {
-    prevId?.apply(this, arguments);
-    const oldId = node._plRouterId;
-    const newId = idW.value;
-    // Carry only slaves explicitly tracking the old id; leave others (incl. NaN).
-    if (newId && oldId && oldId !== newId) {
-      for (const n of app.graph?._nodes || []) {
-        if (n.comfyClass !== "ProjectLogicRouterSlave") continue;
-        const sidW = getWidget(n, "router_id");
-        if (sidW && sidW.value === oldId) sidW.value = newId;
-      }
-    }
-    node._plRouterId = newId;
-    reconfigureAllSlaves();
-    broadcast(newId, actW.value);
-  };
-
-  // Removing the master leaves slaves with no master (NaN/red).
+  if (labelW) {
+    const prevLabel = labelW.callback;
+    labelW.callback = function () {
+      prevLabel?.apply(this, arguments);
+      reconfigureAllSlaves(); // refresh slave dropdown displays (link is by id)
+    };
+  }
   const prevRem = node.onRemoved;
   node.onRemoved = function () {
     prevRem?.apply(this, arguments);
@@ -114,14 +91,14 @@ function setupMaster(node) {
   };
 
   setTimeout(() => {
-    reconfigureAllSlaves(); // NaN slaves adopt this master
-    broadcast(idW.value, actW.value);
+    if (labelW && !labelW.value) labelW.value = `Router ${node.id}`;
+    reconfigureAllSlaves();
+    broadcast(myId(), actW.value);
   }, 60);
 }
 
 // --------------------------- follower routing ------------------------------ //
-// Slots ARE the pass types: rename each input slot to its type name (Python then
-// receives the connected input keyed by that name).
+// Slots ARE the pass types: rename each input slot to its type name.
 function reconcileInputs(node, types) {
   const k = Math.min(types.length, MAX_INPUTS);
   while ((node.inputs?.length || 0) > k) {
@@ -141,22 +118,29 @@ function reconcileInputs(node, types) {
   node.setSize?.(node.computeSize());
 }
 
-// Standalone so the hub-change listener can re-run it for any slave.
-// Never mutates router_id — it only flags whether a matching master exists, so a
-// slave reconnects on its own if its master reappears and is never silently moved.
 function configureSlave(node) {
-  const idW = getWidget(node, "router_id");
+  const masterW = getWidget(node, "master");
+  const ridW = getWidget(node, "router_id");
   const actW = getWidget(node, "active_type");
   reconcileInputs(node, consumerTypes(node));
 
-  node._plNoMaster = !listMasterIds().includes(idW?.value);
+  const id = ridW?.value || "";
+  const m = id ? masterById(id) : null;
+  node._plNoMaster = !m; // no resolved master (none selected, or missing)
 
-  const a = ACTIVE[idW?.value];
-  if (a != null && actW) actW.value = a;
+  if (masterW) {
+    if (m) masterW.value = m.display;        // reflect current (possibly renamed) title
+    else if (id) masterW.value = `(missing ${id})`;
+    else masterW.value = NONE;
+  }
+  if (m && actW) {
+    const a = ACTIVE[id];
+    if (a != null) actW.value = a;
+  }
   node.setDirtyCanvas?.(true, true);
 }
 
-// Draw a link from the active input slot to the output slot.
+// Draw a link from the active input to the output (or a red "no master" note).
 function installActiveLink(node) {
   const prev = node.onDrawForeground;
   node.onDrawForeground = function (ctx) {
@@ -176,7 +160,6 @@ function installActiveLink(node) {
     if (!this.outputs?.length) return;
     const active = getWidget(this, "active_type")?.value;
     if (!active) return;
-
     const inSlot = this.inputs?.findIndex((i) => i.name === active);
     if (inSlot == null || inSlot < 0) return;
 
@@ -186,7 +169,6 @@ function installActiveLink(node) {
     const ay = ip[1] - this.pos[1];
     const bx = op[0] - this.pos[0];
     const by = op[1] - this.pos[1];
-
     ctx.save();
     ctx.strokeStyle = "#56ccff";
     ctx.lineWidth = 2.5;
@@ -205,19 +187,27 @@ function installActiveLink(node) {
 }
 
 function setupFollower(node) {
-  const idW = getWidget(node, "router_id");
+  const masterW = getWidget(node, "master");
+  const ridW = getWidget(node, "router_id");
   hideWidget(getWidget(node, "active_type"));
+  hideWidget(ridW);
 
-  // router_id: dropdown of all Router Master ids; unconnected default is "NaN".
-  comboFromFn(idW, listMasterIds, "NaN");
-
-  if (idW) {
-    const prev = idW.callback;
-    idW.callback = function () {
+  // master: dropdown of master titles (value resolved to the master's node id).
+  comboFromFn(masterW, () => [NONE, ...masterList().map((m) => m.display)], NONE);
+  if (masterW) {
+    const prev = masterW.callback;
+    masterW.callback = function () {
       prev?.apply(this, arguments);
+      if (masterW.value === NONE) {
+        if (ridW) ridW.value = "";
+      } else {
+        const m = masterByDisplay(masterW.value);
+        if (ridW) ridW.value = m ? m.id : "";
+      }
       configureSlave(node);
     };
   }
+
   const onCfg = node.onConfigure;
   node.onConfigure = function () {
     onCfg?.apply(this, arguments);
@@ -228,7 +218,7 @@ function setupFollower(node) {
   setTimeout(() => configureSlave(node), 50);
 }
 
-// When the hub config changes, relabel every slave's inputs.
+// When the hub config changes, relabel every slave's input slots.
 window.addEventListener("projectlogic:changed", reconfigureAllSlaves);
 
 // ----------------------------- registration -------------------------------- //
@@ -237,11 +227,8 @@ app.registerExtension({
 
   async nodeCreated(node) {
     try {
-      if (node.comfyClass === "ProjectLogicRouterMaster") {
-        setupMaster(node);
-      } else if (node.comfyClass === "ProjectLogicRouterSlave") {
-        setupFollower(node);
-      }
+      if (node.comfyClass === "ProjectLogicRouterMaster") setupMaster(node);
+      else if (node.comfyClass === "ProjectLogicRouterSlave") setupFollower(node);
     } catch (e) {
       console.error("[projectlogic] router setup failed", node.comfyClass, e);
     }

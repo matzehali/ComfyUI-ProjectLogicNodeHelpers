@@ -207,24 +207,6 @@ def frame_count_for(path: str, kind: str = "sequence") -> int:
     return count_sequence(path)[1]
 
 
-def pad_frames(n: int, minimum: int = 0, multiple: int = 1, offset: int = 0) -> int:
-    """Pad a frame count to a model's length needs.
-
-    Enforce a minimum, round **up** to a multiple, then add an offset
-    (e.g. LTX-style 8n+1 -> multiple=8, offset=1). A count of 0 stays 0.
-    """
-    import math
-
-    n = int(n or 0)
-    if n <= 0:
-        return 0
-    minimum = max(0, int(minimum or 0))
-    multiple = max(1, int(multiple or 1))
-    n = max(n, minimum)
-    n = math.ceil(n / multiple) * multiple
-    return max(0, n + int(offset or 0))
-
-
 # --------------------------------------------------------------------------- #
 # Folder / sequence scanning (used by the JS dropdowns via server routes)
 # --------------------------------------------------------------------------- #

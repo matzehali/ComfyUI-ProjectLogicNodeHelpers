@@ -31,7 +31,6 @@ from .paths import (
     OUTPUT_TEMPLATE,
     count_sequence,
     frame_count_for,
-    pad_frames,
     render_template,
     split_path,
 )
@@ -46,7 +45,6 @@ GROUP_TYPE = "PL_GROUP"
 CONFIG_FIELDS = (
     "project_path", "shot", "global_seed",
     "default_template", "output_template", "plate_clip", "passes_json",
-    "frame_min", "frame_multiple", "frame_offset",
 )
 
 
@@ -92,8 +90,7 @@ def _pass_entry(template, root, shot, type_, ext, seed, kind):
 
 def build_bundle(project_path="", shot="", global_seed=0,
                  default_template=DEFAULT_TEMPLATE, output_template=OUTPUT_TEMPLATE,
-                 plate_clip="", passes_json=_DEFAULT_PASSES,
-                 frame_min=0, frame_multiple=1, frame_offset=0):
+                 plate_clip="", passes_json=_DEFAULT_PASSES):
     """Build the PROJECT_LOGIC bundle from raw config.
 
     Shared by the hub node and by consumers rebuilding from a broadcast config.
@@ -152,28 +149,20 @@ def build_bundle(project_path="", shot="", global_seed=0,
         "default_template": default_template,
         "output_template": output_template,
         "passes": passes,
-        "pad": {
-            "min": int(frame_min or 0),
-            "multiple": int(frame_multiple or 1),
-            "offset": int(frame_offset or 0),
-        },
     }
 
 
-def base_frame_count(bundle, padded=True):
+def base_frame_count(bundle):
     """The project's single length, read from the base clip (plate, else 'base').
 
-    All passes are created at this length, so it drives every framecount.
+    All passes are created at this length, so it drives every framecount. Any
+    model-length padding is done downstream with math nodes.
     """
     passes = bundle.get("passes", {})
     src = passes.get("plate") or {}
     if not src.get("sequence_path"):
         src = passes.get("base") or {}
-    raw = frame_count_for(src.get("sequence_path", ""), src.get("kind", "sequence"))
-    if not padded:
-        return raw
-    pad = bundle.get("pad", {})
-    return pad_frames(raw, pad.get("min", 0), pad.get("multiple", 1), pad.get("offset", 0))
+    return frame_count_for(src.get("sequence_path", ""), src.get("kind", "sequence"))
 
 
 def _prompt_field(prompt, ins, name):
@@ -242,9 +231,6 @@ class ProjectLogic:
             },
             "optional": {
                 "plate_clip": ("STRING", {"default": "", "tooltip": "Main base clip inside the shot folder (sequence pattern or movie). Its length drives every framecount."}),
-                "frame_min": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFF, "tooltip": "Model length padding: minimum frame count."}),
-                "frame_multiple": ("INT", {"default": 1, "min": 1, "max": 4096, "tooltip": "Round the base length UP to a multiple of this (e.g. 8 for LTX)."}),
-                "frame_offset": ("INT", {"default": 0, "min": -64, "max": 64, "tooltip": "Add after rounding (e.g. 1 for LTX's 8n+1)."}),
                 # Single-line + JS-hidden; the pass-line editor is the real UI.
                 "passes_json": ("STRING", {"default": _DEFAULT_PASSES}),
             },
@@ -261,8 +247,7 @@ class ProjectLogic:
         return float("nan")
 
     def build(self, project_path, shot, global_seed, default_template,
-              output_template, plate_clip="", passes_json=_DEFAULT_PASSES,
-              frame_min=0, frame_multiple=1, frame_offset=0):
+              output_template, plate_clip="", passes_json=_DEFAULT_PASSES):
         return {"ui": {}}
 
 
@@ -317,18 +302,18 @@ class ProjectLogicExtract:
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicRouterMaster:
-    """Master selector. Picks the active pass type for a given ``router_id``.
+    """Master selector. Picks the active pass type for its router group.
 
-    Has no outputs: it drives followers (ProjectLogicRouterSlave) sharing the same
-    ``router_id`` purely through the frontend broadcast layer. Use different
-    ``router_id`` values to run independent router groups in one graph.
+    Identity is the node's own id (stable, unique); ``label`` is a free, editable
+    title (duplicates allowed). Slaves reference the id, not the label, so renaming
+    never breaks the link. Drives followers purely via the frontend broadcast layer.
     """
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "router_id": ("STRING", {"default": "main", "tooltip": "Followers with the same router_id track this selection."}),
+                "label": ("STRING", {"default": "", "tooltip": "Editable title for this router (duplicates OK). Slaves link by the node's unique id, not this."}),
                 "active": ("STRING", {"default": "base", "tooltip": "Active pass type (dropdown from the project's passes)."}),
             },
         }
@@ -338,8 +323,8 @@ class ProjectLogicRouterMaster:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
 
-    def noop(self, router_id="main", active="base"):
-        return {"ui": {"active": [active], "router_id": [router_id]}}
+    def noop(self, label="", active="base"):
+        return {"ui": {"active": [active]}}
 
 
 # --------------------------------------------------------------------------- #
@@ -351,8 +336,8 @@ class ProjectLogicRouterSlave:
 
     The JS layer renames each input slot to a project pass type, so an input
     connected to the active pass arrives in ``kwargs`` keyed by that type name.
-    ``active_type`` is kept in sync with the ProjectLogicRouterMaster sharing
-    this node's ``router_id``.
+    ``master`` shows the chosen master's title; ``router_id`` stores that master's
+    unique node id (the real link); ``active_type`` mirrors the master's selection.
     """
 
     @classmethod
@@ -362,9 +347,10 @@ class ProjectLogicRouterSlave:
             optional[f"input_{i}"] = (ANY,)
         return {
             "required": {
-                # Fresh slaves start unconnected ("NaN") so they never accidentally
-                # share a default id with a newly created master.
-                "router_id": ("STRING", {"default": "NaN"}),
+                # master: visible title picker (JS combo). router_id: the resolved
+                # master node id (JS-hidden). Fresh slaves start unconnected.
+                "master": ("STRING", {"default": ""}),
+                "router_id": ("STRING", {"default": ""}),
                 "active_type": ("STRING", {"default": ""}),
             },
             "optional": optional,
@@ -375,7 +361,7 @@ class ProjectLogicRouterSlave:
     FUNCTION = "route"
     CATEGORY = CATEGORY
 
-    def route(self, router_id="main", active_type="", **kwargs):
+    def route(self, master="", router_id="", active_type="", **kwargs):
         # Slots are renamed to pass types, so the active input arrives by name.
         if active_type and kwargs.get(active_type) is not None:
             return (kwargs[active_type],)
@@ -414,9 +400,7 @@ class ProjectLogicPreview:
             return {"ui": {"text": [text]}, "result": (text,)}
 
         try:
-            raw = base_frame_count(bundle, padded=False)
-            padded = base_frame_count(bundle, padded=True)
-            length = f"base frames: {raw}" + (f"  ->  padded {padded}" if padded != raw else "")
+            length = f"base frames: {base_frame_count(bundle)}"
         except RuntimeError:
             length = "base frames: ? (install ffmpeg)"
 
