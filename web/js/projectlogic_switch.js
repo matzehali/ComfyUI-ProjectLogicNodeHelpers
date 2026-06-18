@@ -90,6 +90,22 @@ function setupMaster(node) {
     setTimeout(reconfigureAllSlaves, 20);
   };
 
+  // Spawn a new slave already linked to this master (by id).
+  node.addWidget("button", "＋ new slave", null, () => {
+    const LG = window.LiteGraph || globalThis.LiteGraph;
+    if (!LG?.createNode || !app.graph) return;
+    const slave = LG.createNode("ProjectLogicRouterSlave");
+    if (!slave) return;
+    slave.pos = [node.pos[0] + (node.size?.[0] || 220) + 40, node.pos[1]];
+    app.graph.add(slave);
+    setTimeout(() => {
+      const ridW = getWidget(slave, "router_id");
+      if (ridW) ridW.value = String(node.id);
+      configureSlave(slave); // resolve title, active, slot labels
+      app.graph.setDirtyCanvas(true, true);
+    }, 60);
+  });
+
   setTimeout(() => {
     if (labelW && !labelW.value) labelW.value = `Router ${node.id}`;
     reconfigureAllSlaves();
