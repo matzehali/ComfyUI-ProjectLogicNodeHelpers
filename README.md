@@ -101,7 +101,5 @@ the node** after a run — no separate Display node needed.
   are created at the base length, they don't exist yet at setup. Sequences count
   their `####` files; a movie base is read via `ffprobe` (container `nb_frames`, fast;
   missing ffmpeg raises asking you to install it — `brew install ffmpeg` or
-  `pip install static-ffmpeg`).
-- **Model-length padding** on the hub: `frame_min` (minimum), `frame_multiple` (round
-  the base length up to this), `frame_offset` (add after). E.g. LTX 8n+1 → multiple 8,
-  offset 1. `framecount` is the padded value; defaults (1/0/0) leave it unchanged.
+  `pip install static-ffmpeg`). Any model-length padding is done downstream with math
+  nodes.
