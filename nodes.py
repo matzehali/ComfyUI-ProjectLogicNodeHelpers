@@ -472,9 +472,39 @@ class UnpackNoodles:
         return {"ui": {"labels": [labels]}, "result": tuple(out)}
 
 
+# --------------------------------------------------------------------------- #
+# Node 8 — SelectPath (native OS file/folder picker -> string)
+# --------------------------------------------------------------------------- #
+
+class ProjectLogicSelectPath:
+    """Pick a path with the native OS dialog (Browse button) and output it."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "path": ("STRING", {"default": "", "tooltip": "Selected path (set by Browse, or typed)."}),
+                "mode": (["folder", "file"], {"default": "folder"}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("path",)
+    FUNCTION = "get_path"
+    CATEGORY = CATEGORY
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def get_path(self, path, mode="folder"):
+        return (path,)
+
+
 NODE_CLASS_MAPPINGS = {
     "ProjectLogic": ProjectLogic,
     "ProjectLogicExtract": ProjectLogicExtract,
+    "ProjectLogicSelectPath": ProjectLogicSelectPath,
     "ProjectLogicRouterMaster": ProjectLogicRouterMaster,
     "ProjectLogicRouterSlave": ProjectLogicRouterSlave,
     "ProjectLogicPreview": ProjectLogicPreview,

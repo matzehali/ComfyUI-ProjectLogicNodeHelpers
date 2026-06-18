@@ -39,6 +39,12 @@ control), `default_template`, `output_template`, and a dynamic **pass-line edito
 (type / ext / kind / own-subfolder / optional per-line template; add/remove lines;
 `custom` reveals a free-text type; type list includes `PlateA/B/C`).
 
+### Project Logic SelectPath
+A **Browse…** button opens the native OS file/folder dialog (folder or file via
+`mode`) and drops the chosen absolute path into the `path` widget, output as a
+STRING — wire it into the hub's `project_path` (or anywhere). The dialog opens on
+the **ComfyUI server host**, so it's meant for local use.
+
 ### Project Logic Extract
 `pass_name` is a dropdown **auto-filled with the project's configured passes**
 (plus `output`/`plate`). Outputs: `full_path` (loader-ready, incl. ext), `pathtofile`
