@@ -68,14 +68,12 @@ function setupMaster(node) {
     prevId?.apply(this, arguments);
     const oldId = node._plRouterId;
     const newId = idW.value;
-    // Carry every slave that tracked the old id (or had none) onto the new id.
-    if (newId && oldId !== newId) {
+    // Carry only slaves explicitly tracking the old id; leave others (incl. NaN).
+    if (newId && oldId && oldId !== newId) {
       for (const n of app.graph?._nodes || []) {
         if (n.comfyClass !== "ProjectLogicRouterSlave") continue;
         const sidW = getWidget(n, "router_id");
-        if (sidW && (sidW.value === oldId || sidW.value === "NaN")) {
-          sidW.value = newId;
-        }
+        if (sidW && sidW.value === oldId) sidW.value = newId;
       }
     }
     node._plRouterId = newId;
@@ -119,19 +117,14 @@ function reconcileInputs(node, types) {
 }
 
 // Standalone so the hub-change listener can re-run it for any slave.
+// Never mutates router_id — it only flags whether a matching master exists, so a
+// slave reconnects on its own if its master reappears and is never silently moved.
 function configureSlave(node) {
   const idW = getWidget(node, "router_id");
   const actW = getWidget(node, "active_type");
   reconcileInputs(node, consumerTypes(node));
 
-  const masters = listMasterIds();
-  if (!masters.length) {
-    node._plNoMaster = true;
-    if (idW) idW.value = "NaN";
-  } else {
-    node._plNoMaster = false;
-    if (idW && !masters.includes(idW.value)) idW.value = masters[0];
-  }
+  node._plNoMaster = !listMasterIds().includes(idW?.value);
 
   const a = ACTIVE[idW?.value];
   if (a != null && actW) actW.value = a;
