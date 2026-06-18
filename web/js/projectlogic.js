@@ -1,29 +1,35 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import {
+  getWidget,
+  hideWidget,
+  asCombo,
+  comboFromFn,
+  consumerTypes,
+  listProjectIds,
+  broadcastProjects,
+} from "./projectlogic_shared.js";
 
 // --------------------------------------------------------------------------- //
 // Vocabularies (kept in sync with paths.py)
 // --------------------------------------------------------------------------- //
 const TYPE_OPTIONS = [
   "base", "mask", "depthmap", "normals", "motion",
-  "matte", "beauty", "cryptomatte", "custom", "none",
+  "matte", "beauty", "cryptomatte",
+  "PlateA", "PlateB", "PlateC",
+  "custom", "none",
 ];
 const EXT_OPTIONS = ["exr", "png", "jpg", "tiff", "webp", "mov", "mp4"];
 const KIND_OPTIONS = ["sequence", "movie"];
 
-// --------------------------------------------------------------------------- //
-// Small helpers
-// --------------------------------------------------------------------------- //
-function getWidget(node, name) {
-  return node.widgets?.find((w) => w.name === name);
-}
+const CONFIG_FIELDS = [
+  "project_id", "project_path", "shot", "global_seed",
+  "default_template", "output_template", "plate_clip",
+];
 
-function hideWidget(w) {
-  if (!w) return;
-  w.hidden = true;
-  w.computeSize = () => [0, -4];
-}
-
+// --------------------------------------------------------------------------- //
+// Local DOM helpers
+// --------------------------------------------------------------------------- //
 async function fetchJSON(url) {
   try {
     const res = await api.fetchApi(url);
@@ -69,19 +75,8 @@ function makeInput(value, placeholder, onChange) {
 }
 
 // --------------------------------------------------------------------------- //
-// Shot / plate dropdowns (in-place text -> combo conversion + refresh)
+// Shot / plate dropdowns
 // --------------------------------------------------------------------------- //
-function asCombo(w, values, keepCurrent = true) {
-  if (!w) return;
-  w.type = "combo";
-  w.options = w.options || {};
-  let list = Array.isArray(values) ? values.slice() : [];
-  if (keepCurrent && w.value && !list.includes(w.value)) list.unshift(w.value);
-  if (!list.length) list = [w.value || ""];
-  w.options.values = list;
-  if (!list.includes(w.value)) w.value = list[0];
-}
-
 async function refreshShots(node) {
   const projectW = getWidget(node, "project_path");
   const shotW = getWidget(node, "shot");
@@ -90,6 +85,7 @@ async function refreshShots(node) {
     `/projectlogic/subfolders?path=${encodeURIComponent(projectW.value || "")}`,
   );
   asCombo(shotW, data?.folders || []);
+  broadcastProjects();
   node.setDirtyCanvas?.(true, true);
 }
 
@@ -104,6 +100,7 @@ async function refreshPlates(node) {
     `/projectlogic/sequences?path=${encodeURIComponent(shotDir)}`,
   );
   asCombo(plateW, ["", ...(data?.sequences || [])]);
+  broadcastProjects();
   node.setDirtyCanvas?.(true, true);
 }
 
@@ -112,12 +109,9 @@ function setupProjectNode(node) {
   const shotW = getWidget(node, "shot");
   const plateW = getWidget(node, "plate_clip");
 
-  // Convert to dropdowns immediately so they always render as combos, even
-  // before (or without) a successful folder scan.
   asCombo(shotW, []);
   asCombo(plateW, [""]);
 
-  // project_path edited -> repopulate shots (then plates for the first shot).
   if (projectW) {
     const prev = projectW.callback;
     projectW.callback = function () {
@@ -125,7 +119,6 @@ function setupProjectNode(node) {
       refreshShots(node).then(() => refreshPlates(node));
     };
   }
-  // shot changed -> repopulate plate clips for that shot.
   if (shotW) {
     const prev = shotW.callback;
     shotW.callback = function () {
@@ -134,11 +127,20 @@ function setupProjectNode(node) {
     };
   }
 
-  // Manual refresh buttons (fallback / explicit rescan).
+  // Any config edit re-broadcasts to consumers.
+  for (const f of CONFIG_FIELDS) {
+    const w = getWidget(node, f);
+    if (!w) continue;
+    const prev = w.callback;
+    w.callback = function () {
+      prev?.apply(this, arguments);
+      broadcastProjects();
+    };
+  }
+
   node.addWidget("button", "↻ scan shots", null, () => refreshShots(node));
   node.addWidget("button", "↻ scan plate clips", null, () => refreshPlates(node));
 
-  // Initial population, and again after a saved workflow loads.
   const doRefresh = () => refreshShots(node).then(() => refreshPlates(node));
   setTimeout(doRefresh, 50);
   const onCfg = node.onConfigure;
@@ -156,7 +158,6 @@ function blankRow() {
 }
 
 function normalizeRows(rows) {
-  // Keep only real rows, then ensure exactly one trailing blank ("none") row.
   const cleaned = rows.filter((r) => r.type && r.type !== "none");
   cleaned.push(blankRow());
   return cleaned;
@@ -181,10 +182,12 @@ function buildPassEditor(node) {
   container.style.cssText =
     "display:flex;flex-direction:column;gap:3px;padding:4px 2px;font-family:sans-serif;";
 
+  let domWidget;
+
   function commit() {
-    // Persist only real (non-blank) rows.
     const out = rows.filter((r) => r.type && r.type !== "none");
     passesW.value = JSON.stringify(out);
+    broadcastProjects();
   }
 
   function render() {
@@ -202,7 +205,6 @@ function buildPassEditor(node) {
       line.style.cssText =
         "display:grid;grid-template-columns:1.2fr 1.2fr 0.8fr 1fr auto auto;gap:3px;align-items:center;";
 
-      // type
       const typeSel = makeSelect(TYPE_OPTIONS, row.type, (v) => {
         row.type = v;
         commit();
@@ -210,7 +212,6 @@ function buildPassEditor(node) {
       });
       line.appendChild(typeSel);
 
-      // custom name (only when type === custom) else ext/kind shift in
       if (row.type === "custom") {
         line.appendChild(
           makeInput(row.custom, "custom type", (v) => {
@@ -219,11 +220,9 @@ function buildPassEditor(node) {
           }),
         );
       } else {
-        const spacer = document.createElement("span");
-        line.appendChild(spacer);
+        line.appendChild(document.createElement("span"));
       }
 
-      // ext
       line.appendChild(
         makeSelect(EXT_OPTIONS, row.ext, (v) => {
           row.ext = v;
@@ -231,7 +230,6 @@ function buildPassEditor(node) {
         }),
       );
 
-      // kind
       line.appendChild(
         makeSelect(KIND_OPTIONS, row.kind, (v) => {
           row.kind = v;
@@ -239,7 +237,6 @@ function buildPassEditor(node) {
         }),
       );
 
-      // own subfolder toggle
       const chk = document.createElement("input");
       chk.type = "checkbox";
       chk.checked = !!row.own_subfolder;
@@ -250,7 +247,6 @@ function buildPassEditor(node) {
       });
       line.appendChild(chk);
 
-      // remove button (not on the trailing blank row)
       const rm = document.createElement("button");
       rm.textContent = isBlank ? "+" : "×";
       rm.title = isBlank ? "add line" : "remove line";
@@ -269,13 +265,11 @@ function buildPassEditor(node) {
 
       container.appendChild(line);
 
-      // optional per-line template override
       if (!isBlank) {
         const tmpl = makeInput(row.template, "template override (optional)", (v) => {
           row.template = v;
           commit();
         });
-        tmpl.style.gridColumn = "1 / -1";
         const wrap = document.createElement("div");
         wrap.style.cssText = "display:grid;grid-template-columns:1fr;";
         wrap.appendChild(tmpl);
@@ -288,7 +282,7 @@ function buildPassEditor(node) {
     node.setDirtyCanvas?.(true, true);
   }
 
-  const domWidget = node.addDOMWidget("passes_editor", "div", container, {
+  domWidget = node.addDOMWidget("passes_editor", "div", container, {
     serialize: false,
     hideOnZoom: false,
   });
@@ -298,23 +292,80 @@ function buildPassEditor(node) {
 }
 
 // --------------------------------------------------------------------------- //
+// Consumers (Extract / Preview): project_id picker + config mirror
+// --------------------------------------------------------------------------- //
+function setupConsumer(node, withPassName) {
+  const idW = getWidget(node, "project_id");
+  comboFromFn(idW, listProjectIds, "main");
+
+  hideWidget(getWidget(node, "project_config"));
+
+  if (withPassName) {
+    comboFromFn(getWidget(node, "pass_name"), () => consumerTypes(node), "base");
+  }
+
+  const refresh = () => broadcastProjects();
+  if (idW) {
+    const prev = idW.callback;
+    idW.callback = function () {
+      prev?.apply(this, arguments);
+      refresh();
+    };
+  }
+  const occ = node.onConnectionsChange;
+  node.onConnectionsChange = function () {
+    occ?.apply(this, arguments);
+    setTimeout(refresh, 10);
+  };
+  const onCfg = node.onConfigure;
+  node.onConfigure = function () {
+    onCfg?.apply(this, arguments);
+    setTimeout(refresh, 50);
+  };
+  setTimeout(refresh, 50);
+}
+
+function setupPreview(node) {
+  setupConsumer(node, false);
+
+  const pre = document.createElement("pre");
+  pre.style.cssText =
+    "white-space:pre-wrap;word-break:break-all;font-size:10px;line-height:1.3;" +
+    "color:#cdd;background:#1b1b1b;border:1px solid #333;border-radius:4px;" +
+    "padding:6px;margin:0;overflow:auto;max-height:400px;";
+  pre.textContent = "(run to preview)";
+
+  const widget = node.addDOMWidget("preview_text", "div", pre, { serialize: false });
+  widget.computeSize = () => [node.size[0], Math.min(400, Math.max(80, pre.scrollHeight + 14))];
+
+  const prev = node.onExecuted;
+  node.onExecuted = function (message) {
+    prev?.apply(this, arguments);
+    const t = message?.text;
+    pre.textContent = (Array.isArray(t) ? t.join("") : t) || "(empty)";
+    node.setSize?.(node.computeSize());
+    node.setDirtyCanvas?.(true, true);
+  };
+}
+
+// --------------------------------------------------------------------------- //
 // Extension registration
 // --------------------------------------------------------------------------- //
 app.registerExtension({
   name: "projectlogic.ui",
 
   async nodeCreated(node) {
-    if (node.comfyClass !== "ProjectLogic") return;
-    // Isolate the two subsystems so one failing never blocks the other.
     try {
-      setupProjectNode(node);
+      if (node.comfyClass === "ProjectLogic") {
+        setupProjectNode(node);
+        buildPassEditor(node);
+      } else if (node.comfyClass === "ProjectLogicExtract") {
+        setupConsumer(node, true);
+      } else if (node.comfyClass === "ProjectLogicPreview") {
+        setupPreview(node);
+      }
     } catch (e) {
-      console.error("[projectlogic] shot/plate dropdown setup failed", e);
-    }
-    try {
-      buildPassEditor(node);
-    } catch (e) {
-      console.error("[projectlogic] pass editor setup failed", e);
+      console.error("[projectlogic] node setup failed", node.comfyClass, e);
     }
   },
 });

@@ -26,50 +26,50 @@ the frame-number padding; it is dropped for `movie` passes. The implicit
 
 ## Nodes
 
+### Broadcast (`project_id`) — no wires needed
+Every consumer (Extract / Preview / Router Slave) can read the project two ways:
+1. **Wired** — connect the hub's `PROJECT_LOGIC` output to the consumer's `project`
+   input (takes precedence).
+2. **Broadcast** — set the consumer's `project_id` to match a hub's `project_id`.
+   The JS layer mirrors the hub's config into the consumer, which rebuilds the
+   bundle locally at run time. No noodle required.
+
 ### Project Logic (hub)
-Inputs: `project_path`, `shot` (dropdown of subfolders), `plate_clip` (dropdown of
-detected sequences/movies in the shot folder), `seed`, `default_template`,
+Inputs: `project_id`, `project_path`, `shot` (dropdown of subfolders), `plate_clip`
+(dropdown of detected sequences/movies), `global_seed`, `default_template`,
 `output_template`, and a dynamic **pass-line editor** (type / ext / kind /
 own-subfolder / optional per-line template; add/remove lines; `custom` reveals a
-free-text type). Outputs a single `PROJECT_LOGIC` bundle.
+free-text type; type list includes `PlateA/B/C`). Outputs a `PROJECT_LOGIC` bundle
+and broadcasts its config on `project_id`.
 
 ### Project Logic Extract
-Takes the `PROJECT_LOGIC` bundle and a `pass_name` dropdown (any common type plus
-`plate`, `output`, `custom`). Outputs `directory`, `filename`, `sequence_path`,
-`ext`, `frame_count` — wire only what each downstream node needs:
+`pass_name` is a dropdown **auto-filled with the project's configured passes**
+(plus `output`/`plate`). Source the project via a wired `project` or a `project_id`.
+Outputs: `full_path` (loader-ready, incl. ext), `pathtofile` (folder), `file`
+(saver-ready filename — no ext, keeps `####`), `framecount`, `seed`.
 
-* CoCo **SaverNode**: `directory` → `file_path`, `filename` → `filename`
-  (filename has **no** extension, so set the saver's `file_type` to `ext`).
-* CoCo **EXR sequence loader**: `sequence_path` → `sequence_path`.
-* `frame_count` → any INT input.
-
-Unknown / custom pass names are computed on the fly from the default template, so
-arbitrary passes work without pre-declaring them.
-
-### Project Logic Path Split
-Generic helper: any path string → `directory`, `filename` (no ext), `filename_ext`,
-`ext`, `frame_count`. Handy right before a saver when feeding a raw path.
+* CoCo **SaverNode**: `pathtofile` → `file_path`, `file` → `filename` (set the
+  saver's `file_type` to your pass ext).
+* CoCo **EXR sequence loader**: `full_path` → `sequence_path`.
 
 ### Project Logic Router Master / Router Slave
 A wireless "active pass" router so one dropdown reroutes the whole graph.
 
-* **Router Master** — pick the active pass type (`base`/`mask`/`depthmap`/…) for a
-  given `router_id`. No output noodles. Use different `router_id` values to run
-  independent router groups in the same graph.
-* **Router Slave** — a mux with one `ANY` input per pass (labels come from a
-  connected `PROJECT_LOGIC` bundle, or fall back to the master's list). It outputs
-  the input matching the master's active type for the same `router_id`. Inputs
-  accept anything: IMAGE, MASK, LATENT, STRING, …
-
-Flip the master once and every slave on that `router_id` follows — no rewiring.
+* **Router Master** — pick the active pass type for a `router_id`. `active` is a
+  dropdown of the project's passes. No output noodles. Different `router_id` values
+  drive independent router groups.
+* **Router Slave** — a mux whose `ANY` input slots are **auto-populated and labelled
+  from the project's passes** (via `project_id` or a wired bundle); no manual slot
+  config. `router_id` is a dropdown of the masters in the graph. It outputs the input
+  matching the master's active type, and **draws a link from the active input to the
+  output** so the live route is visible at a glance.
 
 ### Project Logic Preview
-Takes a `PROJECT_LOGIC` bundle and outputs a formatted multi-line `text` summary of
-every resolved pass (seq path / dir / filename / frame count). Wire it to any
-"Display Any" node to sanity-check paths before running.
+Shows the resolved bundle (seq path / dir / file / frame count per pass) **inline on
+the node** after a run — no separate Display node needed.
 
 ## Notes
-- The shot/plate dropdowns are populated by two read-only server routes
+- Shot/plate dropdowns are populated by two read-only server routes
   (`/projectlogic/subfolders`, `/projectlogic/sequences`). Without the JS layer the
   fields still work as plain text entry.
-- `frame_count` is a count only (globs the `####` pattern); no start/end range.
+- `framecount` is a count only (globs the `####` pattern); no start/end range.

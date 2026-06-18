@@ -4,29 +4,30 @@ Nodes:
 
 * ``ProjectLogic``            – the hub: project folder + shot + plate clip + seed +
                                configurable pass lines -> one ``PROJECT_LOGIC`` bundle.
-* ``ProjectLogicExtract``     – takes the bundle, selects a pass via dropdown, and
-                               emits ready-to-wire directory / filename / sequence
-                               path / ext / frame count (one noodle in).
-* ``ProjectLogicPathSplit``   – generic helper: any path string -> dir/filename/ext.
+                               Also broadcasts its config on a ``project_id`` so
+                               consumers can rebuild the bundle without a wire.
+* ``ProjectLogicExtract``     – selects a configured pass (dropdown auto-filled from
+                               the project) and emits full_path / pathtofile / file /
+                               framecount / seed.
 * ``ProjectLogicRouterMaster``– broadcast selector: sets the active pass type for a
                                ``router_id`` (no output noodles).
 * ``ProjectLogicRouterSlave`` – follower mux: routes the labelled input matching the
                                master's active type to its output.
-* ``ProjectLogicPreview``     – formatted text dump of a bundle for a Display node.
+* ``ProjectLogicPreview``     – shows the resolved bundle inline on the node.
 
-The dynamic UI (folder-scan dropdowns, pass-row editor, router slot labels +
-broadcast) lives in ``web/js/``; the Python side stays usable with plain fields.
+Consumers accept either a wired ``PROJECT_LOGIC`` input or a ``project_id`` whose
+config is mirrored in (by the JS broadcast layer) and rebuilt locally.
+
+The dynamic UI lives in ``web/js/``; the Python side stays usable with plain fields.
 """
 
 from __future__ import annotations
 
 import json
+import os
 
 from .paths import (
-    COMMON_EXTS,
-    COMMON_TYPES,
     DEFAULT_TEMPLATE,
-    KINDS,
     OUTPUT_TEMPLATE,
     count_sequence,
     render_template,
@@ -36,6 +37,12 @@ from .paths import (
 CATEGORY = "projectlogic"
 
 MAX_SWITCH_INPUTS = 16
+
+# Keys mirrored from the hub into a consumer's project_config (must match the JS).
+CONFIG_FIELDS = (
+    "project_path", "shot", "global_seed",
+    "default_template", "output_template", "plate_clip", "passes_json",
+)
 
 
 class _AnyType(str):
@@ -78,6 +85,98 @@ def _pass_entry(template, root, shot, type_, ext, seed, kind):
     }
 
 
+def build_bundle(project_path="", shot="", global_seed=0,
+                 default_template=DEFAULT_TEMPLATE, output_template=OUTPUT_TEMPLATE,
+                 plate_clip="", passes_json=_DEFAULT_PASSES):
+    """Build the PROJECT_LOGIC bundle from raw config.
+
+    Shared by the hub node and by consumers rebuilding from a broadcast config.
+    """
+    seed = int(global_seed or 0)
+    root = (project_path or "").rstrip("/\\")
+    shot = (shot or "").strip()
+    shot_dir = os.path.join(root, shot) if root and shot else (root or shot)
+
+    passes: dict[str, dict] = {}
+
+    try:
+        lines = json.loads(passes_json) if passes_json else []
+    except (ValueError, TypeError):
+        lines = []
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        type_ = (line.get("type") or "").strip()
+        if type_ == "custom":
+            type_ = (line.get("custom") or "").strip()
+        if not type_ or type_ == "none":
+            continue
+        ext = (line.get("ext") or "exr").strip()
+        kind = (line.get("kind") or "sequence").strip()
+        template = (line.get("template") or "").strip() or default_template
+        passes[type_] = _pass_entry(template, root, shot, type_, ext, seed, kind)
+
+    passes["output"] = _pass_entry(
+        output_template, root, shot, "output", "exr", seed, "sequence"
+    )
+
+    plate_clip = (plate_clip or "").strip()
+    if plate_clip:
+        plate_seq = plate_clip if os.path.isabs(plate_clip) else os.path.join(shot_dir, plate_clip)
+    else:
+        plate_seq = ""
+    _, plate_count = count_sequence(plate_seq)
+    p_dir, p_fileext, p_stem, p_ext = split_path(plate_seq)
+    passes["plate"] = {
+        "type": "plate",
+        "directory": p_dir,
+        "filename": p_stem,
+        "filename_ext": p_fileext,
+        "sequence_path": plate_seq,
+        "ext": p_ext,
+        "kind": "movie" if (p_ext.lower() in ("mov", "mp4", "mkv", "avi", "mxf")) else "sequence",
+        "frame_count": plate_count,
+    }
+
+    return {
+        "root": root,
+        "shot": shot,
+        "shot_dir": shot_dir,
+        "seed": seed,
+        "default_template": default_template,
+        "output_template": output_template,
+        "passes": passes,
+    }
+
+
+def _resolve_bundle(project, project_config):
+    """Return a bundle from a wired input, else rebuild from a broadcast config."""
+    if isinstance(project, dict):
+        return project
+    if project_config:
+        try:
+            cfg = json.loads(project_config)
+        except (ValueError, TypeError):
+            cfg = None
+        if isinstance(cfg, dict):
+            cfg = {k: v for k, v in cfg.items() if k in CONFIG_FIELDS}
+            return build_bundle(**cfg)
+    return None
+
+
+def _pass_for(bundle, name):
+    """Look up a pass in the bundle, computing it on the fly if not configured."""
+    entry = bundle.get("passes", {}).get(name)
+    if entry is None:
+        entry = _pass_entry(
+            bundle.get("default_template", DEFAULT_TEMPLATE),
+            bundle.get("root", ""),
+            bundle.get("shot", ""),
+            name, "exr", bundle.get("seed", 0), "sequence",
+        )
+    return entry
+
+
 # --------------------------------------------------------------------------- #
 # Node 1 — the hub
 # --------------------------------------------------------------------------- #
@@ -87,6 +186,7 @@ class ProjectLogic:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "project_id": ("STRING", {"default": "main", "tooltip": "Broadcast channel. Consumers with this project_id can rebuild the bundle without a wire."}),
                 "project_path": ("STRING", {"default": "", "tooltip": "VFX root folder containing shot subfolders."}),
                 "shot": ("STRING", {"default": "", "tooltip": "Shot name / number (subfolder of project_path)."}),
                 "global_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "tooltip": "Global seed embedded into final output filenames ({seed} token)."}),
@@ -95,7 +195,6 @@ class ProjectLogic:
             },
             "optional": {
                 "plate_clip": ("STRING", {"default": "", "tooltip": "Main base clip inside the shot folder (sequence pattern or movie). Relative to the shot folder unless absolute."}),
-                # Managed by the JS pass-line editor; JSON list of pass configs.
                 "passes_json": ("STRING", {"default": _DEFAULT_PASSES, "multiline": True}),
             },
         }
@@ -109,92 +208,38 @@ class ProjectLogic:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")  # paths/counts depend on disk; always re-evaluate.
 
-    def build(self, project_path, shot, global_seed, default_template, output_template,
-              plate_clip="", passes_json=_DEFAULT_PASSES):
-        import os
-
-        seed = global_seed
-
-        root = (project_path or "").rstrip("/\\")
-        shot = (shot or "").strip()
-        shot_dir = os.path.join(root, shot) if root and shot else (root or shot)
-
-        passes: dict[str, dict] = {}
-
-        # Configured pass lines ------------------------------------------------
-        try:
-            lines = json.loads(passes_json) if passes_json else []
-        except (ValueError, TypeError):
-            lines = []
-        for line in lines:
-            if not isinstance(line, dict):
-                continue
-            type_ = (line.get("type") or "").strip()
-            if type_ == "custom":
-                type_ = (line.get("custom") or "").strip()
-            if not type_ or type_ == "none":
-                continue
-            ext = (line.get("ext") or "exr").strip()
-            kind = (line.get("kind") or "sequence").strip()
-            template = (line.get("template") or "").strip() or default_template
-            passes[type_] = _pass_entry(template, root, shot, type_, ext, seed, kind)
-
-        # Always-present final output -----------------------------------------
-        passes["output"] = _pass_entry(
-            output_template, root, shot, "output", "exr", seed, "sequence"
+    def build(self, project_id, project_path, shot, global_seed, default_template,
+              output_template, plate_clip="", passes_json=_DEFAULT_PASSES):
+        bundle = build_bundle(
+            project_path=project_path, shot=shot, global_seed=global_seed,
+            default_template=default_template, output_template=output_template,
+            plate_clip=plate_clip, passes_json=passes_json,
         )
-
-        # Plate / base clip ----------------------------------------------------
-        plate_clip = (plate_clip or "").strip()
-        if plate_clip:
-            plate_seq = plate_clip if os.path.isabs(plate_clip) else os.path.join(shot_dir, plate_clip)
-        else:
-            plate_seq = ""
-        _, plate_count = count_sequence(plate_seq)
-        p_dir, p_fileext, p_stem, p_ext = split_path(plate_seq)
-        passes["plate"] = {
-            "type": "plate",
-            "directory": p_dir,
-            "filename": p_stem,
-            "filename_ext": p_fileext,
-            "sequence_path": plate_seq,
-            "ext": p_ext,
-            "kind": "movie" if (p_ext.lower() in ("mov", "mp4", "mkv", "avi", "mxf")) else "sequence",
-            "frame_count": plate_count,
-        }
-
-        bundle = {
-            "root": root,
-            "shot": shot,
-            "shot_dir": shot_dir,
-            "seed": int(seed),
-            "default_template": default_template,
-            "output_template": output_template,
-            "passes": passes,
-        }
         return (bundle,)
 
 
 # --------------------------------------------------------------------------- #
-# Node 2 — the extractor / selector ("one noodle in front of the node")
+# Node 2 — the extractor (pass dropdown auto-filled from the project)
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicExtract:
     @classmethod
     def INPUT_TYPES(cls):
-        pass_options = COMMON_TYPES[:-1] + ["plate", "output", "custom"]  # drop "none"
         return {
             "required": {
-                "project": ("PROJECT_LOGIC",),
-                "pass_name": (pass_options, {"default": "base"}),
+                # Populated in JS from the project's configured passes.
+                "pass_name": ("STRING", {"default": "base"}),
+                "project_id": ("STRING", {"default": "main"}),
             },
             "optional": {
-                "custom_pass": ("STRING", {"default": "", "tooltip": "Used when pass_name = custom."}),
+                "project": ("PROJECT_LOGIC",),
+                # Mirrored in by the JS broadcast layer; hidden in the UI.
+                "project_config": ("STRING", {"default": ""}),
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "INT")
-    RETURN_NAMES = ("directory", "filename", "sequence_path", "ext", "frame_count")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "INT", "INT")
+    RETURN_NAMES = ("full_path", "pathtofile", "file", "framecount", "seed")
     FUNCTION = "extract"
     CATEGORY = CATEGORY
 
@@ -202,70 +247,31 @@ class ProjectLogicExtract:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def extract(self, project, pass_name, custom_pass=""):
-        if not isinstance(project, dict):
-            raise ValueError("ProjectLogicExtract: 'project' input is not a PROJECT_LOGIC bundle.")
-
-        name = (custom_pass or "").strip() if pass_name == "custom" else pass_name
-        passes = project.get("passes", {})
-        entry = passes.get(name)
-
-        if entry is None:
-            # Unknown pass: compute on the fly from the default template.
-            entry = _pass_entry(
-                project.get("default_template", DEFAULT_TEMPLATE),
-                project.get("root", ""),
-                project.get("shot", ""),
-                name,
-                "exr",
-                project.get("seed", 0),
-                "sequence",
+    def extract(self, pass_name, project_id="main", project=None, project_config=""):
+        bundle = _resolve_bundle(project, project_config)
+        if bundle is None:
+            raise ValueError(
+                "ProjectLogicExtract: no project. Wire a PROJECT_LOGIC input or set a "
+                "project_id matching a Project Logic node."
             )
 
-        seq_path = entry.get("sequence_path", "")
-        frame_count = entry.get("frame_count")
-        if frame_count is None:
-            _, frame_count = count_sequence(seq_path)
+        entry = _pass_for(bundle, pass_name)
+        seq = entry.get("sequence_path", "")
+        fc = entry.get("frame_count")
+        if fc is None:
+            _, fc = count_sequence(seq)
 
         return (
-            entry.get("directory", ""),
-            entry.get("filename", ""),
-            seq_path,
-            entry.get("ext", ""),
-            int(frame_count or 0),
+            seq,                          # full_path  (loader-ready, incl. ext)
+            entry.get("directory", ""),   # pathtofile (folder)
+            entry.get("filename", ""),    # file       (saver-ready stem, no ext, with ####)
+            int(fc or 0),                 # framecount
+            int(bundle.get("seed", 0)),   # seed
         )
 
 
 # --------------------------------------------------------------------------- #
-# Node 3 — generic path splitter
-# --------------------------------------------------------------------------- #
-
-class ProjectLogicPathSplit:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "path": ("STRING", {"default": "", "tooltip": "Any file path; #### patterns are preserved."}),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "INT")
-    RETURN_NAMES = ("directory", "filename", "filename_ext", "ext", "frame_count")
-    FUNCTION = "split"
-    CATEGORY = CATEGORY
-
-    @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        return float("nan")
-
-    def split(self, path):
-        directory, filename_ext, stem, ext = split_path(path)
-        _, frame_count = count_sequence(path)
-        return (directory, stem, filename_ext, ext, int(frame_count))
-
-
-# --------------------------------------------------------------------------- #
-# Node 4 — Router Master (broadcast control, no output noodles)
+# Node 3 — Router Master (broadcast control, no output noodles)
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicRouterMaster:
@@ -273,7 +279,7 @@ class ProjectLogicRouterMaster:
 
     Has no outputs: it drives followers (ProjectLogicRouterSlave) sharing the same
     ``router_id`` purely through the frontend broadcast layer. Use different
-    ``router_id`` values to run independent switch groups in one graph.
+    ``router_id`` values to run independent router groups in one graph.
     """
 
     @classmethod
@@ -281,10 +287,11 @@ class ProjectLogicRouterMaster:
         return {
             "required": {
                 "router_id": ("STRING", {"default": "main", "tooltip": "Followers with the same router_id track this selection."}),
-                "active": ("STRING", {"default": "base", "tooltip": "Active pass type (dropdown populated from a connected Project Logic node)."}),
+                "project_id": ("STRING", {"default": "main", "tooltip": "Project whose pass types fill the dropdown."}),
+                "active": ("STRING", {"default": "base", "tooltip": "Active pass type (dropdown from the project's passes)."}),
             },
             "optional": {
-                "project": ("PROJECT_LOGIC", {"tooltip": "Optional: populates the dropdown with this bundle's pass types."}),
+                "project": ("PROJECT_LOGIC", {"tooltip": "Optional: source pass types from this bundle instead of project_id."}),
             },
         }
 
@@ -293,33 +300,36 @@ class ProjectLogicRouterMaster:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
 
-    def noop(self, router_id="main", active="base", project=None):
-        # All routing happens client-side; nothing to compute here.
+    def noop(self, router_id="main", project_id="main", active="base", project=None):
         return {"ui": {"active": [active], "router_id": [router_id]}}
 
 
 # --------------------------------------------------------------------------- #
-# Node 5 — Router Slave (follower mux: many ANY inputs -> the active one)
+# Node 4 — Router Slave (follower mux: many ANY inputs -> the active one)
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicRouterSlave:
     """Routes one of its labelled inputs to the output based on the active pass.
 
-    The labels for ``input_1..input_N`` come from the connected Project Logic
-    passes (managed in JS via ``slot_types``); ``active_type`` is kept in sync
-    with the ProjectLogicRouterMaster that shares this node's ``router_id``.
+    Input slots (``input_1..input_N``) map, in order, to the project's pass types
+    (configured passes + ``output`` + ``plate``) — the same ordering the JS uses
+    for the slot labels. ``active_type`` is kept in sync with the
+    ProjectLogicRouterMaster sharing this node's ``router_id``.
     """
 
     @classmethod
     def INPUT_TYPES(cls):
-        optional = {"project": ("PROJECT_LOGIC",)}
+        optional = {
+            "project": ("PROJECT_LOGIC",),
+            # Mirrored in by the JS broadcast layer; hidden in the UI.
+            "project_config": ("STRING", {"default": ""}),
+        }
         for i in range(1, MAX_SWITCH_INPUTS + 1):
             optional[f"input_{i}"] = (ANY,)
         return {
             "required": {
                 "router_id": ("STRING", {"default": "main"}),
-                # JS-managed; hidden in the UI.
-                "slot_types": ("STRING", {"default": "[]"}),
+                "project_id": ("STRING", {"default": "main"}),
                 "active_type": ("STRING", {"default": ""}),
             },
             "optional": optional,
@@ -330,13 +340,10 @@ class ProjectLogicRouterSlave:
     FUNCTION = "route"
     CATEGORY = CATEGORY
 
-    def route(self, router_id="main", slot_types="[]", active_type="", project=None, **kwargs):
-        try:
-            types = json.loads(slot_types)
-            if not isinstance(types, list):
-                types = []
-        except (ValueError, TypeError):
-            types = []
+    def route(self, router_id="main", project_id="main", active_type="",
+              project=None, project_config="", **kwargs):
+        bundle = _resolve_bundle(project, project_config)
+        types = list(bundle.get("passes", {}).keys()) if bundle else []
 
         val = None
         if active_type and active_type in types:
@@ -351,13 +358,21 @@ class ProjectLogicRouterSlave:
 
 
 # --------------------------------------------------------------------------- #
-# Node 6 — Bundle preview (formatted text for a Display node)
+# Node 5 — Bundle preview (shown inline on the node by the JS layer)
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicPreview:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"project": ("PROJECT_LOGIC",)}}
+        return {
+            "required": {
+                "project_id": ("STRING", {"default": "main"}),
+            },
+            "optional": {
+                "project": ("PROJECT_LOGIC",),
+                "project_config": ("STRING", {"default": ""}),
+            },
+        }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("text",)
@@ -369,17 +384,18 @@ class ProjectLogicPreview:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def preview(self, project):
-        if not isinstance(project, dict):
-            text = "(not a PROJECT_LOGIC bundle)"
+    def preview(self, project_id="main", project=None, project_config=""):
+        bundle = _resolve_bundle(project, project_config)
+        if bundle is None:
+            text = f"(no project for project_id '{project_id}')"
             return {"ui": {"text": [text]}, "result": (text,)}
 
         lines = [
-            f"root: {project.get('root', '')}",
-            f"shot: {project.get('shot', '')}   seed: {project.get('seed', '')}",
+            f"root: {bundle.get('root', '')}",
+            f"shot: {bundle.get('shot', '')}   seed: {bundle.get('seed', '')}",
             "",
         ]
-        for name, p in project.get("passes", {}).items():
+        for name, p in bundle.get("passes", {}).items():
             extra = f"   frames={p['frame_count']}" if "frame_count" in p else ""
             lines.append(f"[{name}]{extra}")
             lines.append(f"  seq : {p.get('sequence_path', '')}")
@@ -392,7 +408,6 @@ class ProjectLogicPreview:
 NODE_CLASS_MAPPINGS = {
     "ProjectLogic": ProjectLogic,
     "ProjectLogicExtract": ProjectLogicExtract,
-    "ProjectLogicPathSplit": ProjectLogicPathSplit,
     "ProjectLogicRouterMaster": ProjectLogicRouterMaster,
     "ProjectLogicRouterSlave": ProjectLogicRouterSlave,
     "ProjectLogicPreview": ProjectLogicPreview,

@@ -30,7 +30,9 @@ OUTPUT_TEMPLATE = "{root}/{shot}/{shot}_output/{shot}_output.{seed}.####.{ext}"
 
 COMMON_TYPES = [
     "base", "mask", "depthmap", "normals", "motion",
-    "matte", "beauty", "cryptomatte", "custom", "none",
+    "matte", "beauty", "cryptomatte",
+    "PlateA", "PlateB", "PlateC",
+    "custom", "none",
 ]
 COMMON_EXTS = ["exr", "png", "jpg", "tiff", "webp", "mov", "mp4"]
 KINDS = ["sequence", "movie"]
