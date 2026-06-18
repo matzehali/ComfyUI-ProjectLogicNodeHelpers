@@ -32,7 +32,7 @@ with a popup). It has **no output noodle** and consumers have **no project input
 Extract / Preview read the hub's settings straight from the submitted **prompt** at run
 time, and the router reads the hub's pass list in the editor. Nothing to wire.
 
-### Project Hub
+### Project Logic Hub
 Inputs: `project_path`, `shot` (dropdown of subfolders), `plate_clip` (dropdown of
 detected image sequences/movies), `global_seed` (with the fixed/increment/randomize
 control), `default_template`, `output_template`, and a dynamic **pass-line editor**
