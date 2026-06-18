@@ -11,6 +11,9 @@ try:
         "ProjectLogic": versioned_display_name(f"{PREFIX} Project Logic"),
         "ProjectLogicExtract": versioned_display_name(f"{PREFIX} Project Logic Extract"),
         "ProjectLogicPathSplit": versioned_display_name(f"{PREFIX} Project Logic Path Split"),
+        "ProjectLogicRouterMaster": versioned_display_name(f"{PREFIX} Project Logic Router Master"),
+        "ProjectLogicRouterSlave": versioned_display_name(f"{PREFIX} Project Logic Router Slave"),
+        "ProjectLogicPreview": versioned_display_name(f"{PREFIX} Project Logic Preview"),
     }
 
     WEB_DIRECTORY = "./web"

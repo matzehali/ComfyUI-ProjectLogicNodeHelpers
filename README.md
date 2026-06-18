@@ -50,6 +50,24 @@ arbitrary passes work without pre-declaring them.
 Generic helper: any path string → `directory`, `filename` (no ext), `filename_ext`,
 `ext`, `frame_count`. Handy right before a saver when feeding a raw path.
 
+### Project Logic Router Master / Router Slave
+A wireless "active pass" router so one dropdown reroutes the whole graph.
+
+* **Router Master** — pick the active pass type (`base`/`mask`/`depthmap`/…) for a
+  given `router_id`. No output noodles. Use different `router_id` values to run
+  independent router groups in the same graph.
+* **Router Slave** — a mux with one `ANY` input per pass (labels come from a
+  connected `PROJECT_LOGIC` bundle, or fall back to the master's list). It outputs
+  the input matching the master's active type for the same `router_id`. Inputs
+  accept anything: IMAGE, MASK, LATENT, STRING, …
+
+Flip the master once and every slave on that `router_id` follows — no rewiring.
+
+### Project Logic Preview
+Takes a `PROJECT_LOGIC` bundle and outputs a formatted multi-line `text` summary of
+every resolved pass (seq path / dir / filename / frame count). Wire it to any
+"Display Any" node to sanity-check paths before running.
+
 ## Notes
 - The shot/plate dropdowns are populated by two read-only server routes
   (`/projectlogic/subfolders`, `/projectlogic/sequences`). Without the JS layer the

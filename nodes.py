@@ -1,16 +1,21 @@
 """ComfyUI-projectlogic node definitions.
 
-Three nodes:
+Nodes:
 
-* ``ProjectLogic``         – the hub: project folder + shot + plate clip + seed +
-                             configurable pass lines -> one ``PROJECT_LOGIC`` bundle.
-* ``ProjectLogicExtract``  – takes the bundle, selects a pass via dropdown, and
-                             emits ready-to-wire directory / filename / sequence
-                             path / ext / frame count (one noodle in).
-* ``ProjectLogicPathSplit``– generic helper: any path string -> dir/filename/ext.
+* ``ProjectLogic``            – the hub: project folder + shot + plate clip + seed +
+                               configurable pass lines -> one ``PROJECT_LOGIC`` bundle.
+* ``ProjectLogicExtract``     – takes the bundle, selects a pass via dropdown, and
+                               emits ready-to-wire directory / filename / sequence
+                               path / ext / frame count (one noodle in).
+* ``ProjectLogicPathSplit``   – generic helper: any path string -> dir/filename/ext.
+* ``ProjectLogicRouterMaster``– broadcast selector: sets the active pass type for a
+                               ``router_id`` (no output noodles).
+* ``ProjectLogicRouterSlave`` – follower mux: routes the labelled input matching the
+                               master's active type to its output.
+* ``ProjectLogicPreview``     – formatted text dump of a bundle for a Display node.
 
-The heavy/dynamic UI (folder-scan dropdowns, add/remove pass rows) lives in
-``web/js/projectlogic.js``; the Python side stays usable with plain text fields.
+The dynamic UI (folder-scan dropdowns, pass-row editor, router slot labels +
+broadcast) lives in ``web/js/``; the Python side stays usable with plain fields.
 """
 
 from __future__ import annotations
@@ -29,6 +34,23 @@ from .paths import (
 )
 
 CATEGORY = "projectlogic"
+
+MAX_SWITCH_INPUTS = 16
+
+
+class _AnyType(str):
+    """Type sentinel that compares equal to every other type ("*")."""
+
+    def __eq__(self, other):  # noqa: D401 - matches ComfyUI convention
+        return True
+
+    def __ne__(self, other):
+        return False
+
+    __hash__ = str.__hash__
+
+
+ANY = _AnyType("*")
 
 _DEFAULT_PASSES = json.dumps(
     [
@@ -240,8 +262,136 @@ class ProjectLogicPathSplit:
         return (directory, stem, filename_ext, ext, int(frame_count))
 
 
+# --------------------------------------------------------------------------- #
+# Node 4 — Router Master (broadcast control, no output noodles)
+# --------------------------------------------------------------------------- #
+
+class ProjectLogicRouterMaster:
+    """Master selector. Picks the active pass type for a given ``router_id``.
+
+    Has no outputs: it drives followers (ProjectLogicRouterSlave) sharing the same
+    ``router_id`` purely through the frontend broadcast layer. Use different
+    ``router_id`` values to run independent switch groups in one graph.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "router_id": ("STRING", {"default": "main", "tooltip": "Followers with the same router_id track this selection."}),
+                "active": ("STRING", {"default": "base", "tooltip": "Active pass type (dropdown populated from a connected Project Logic node)."}),
+            },
+            "optional": {
+                "project": ("PROJECT_LOGIC", {"tooltip": "Optional: populates the dropdown with this bundle's pass types."}),
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "noop"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    def noop(self, router_id="main", active="base", project=None):
+        # All routing happens client-side; nothing to compute here.
+        return {"ui": {"active": [active], "router_id": [router_id]}}
+
+
+# --------------------------------------------------------------------------- #
+# Node 5 — Router Slave (follower mux: many ANY inputs -> the active one)
+# --------------------------------------------------------------------------- #
+
+class ProjectLogicRouterSlave:
+    """Routes one of its labelled inputs to the output based on the active pass.
+
+    The labels for ``input_1..input_N`` come from the connected Project Logic
+    passes (managed in JS via ``slot_types``); ``active_type`` is kept in sync
+    with the ProjectLogicRouterMaster that shares this node's ``router_id``.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = {"project": ("PROJECT_LOGIC",)}
+        for i in range(1, MAX_SWITCH_INPUTS + 1):
+            optional[f"input_{i}"] = (ANY,)
+        return {
+            "required": {
+                "router_id": ("STRING", {"default": "main"}),
+                # JS-managed; hidden in the UI.
+                "slot_types": ("STRING", {"default": "[]"}),
+                "active_type": ("STRING", {"default": ""}),
+            },
+            "optional": optional,
+        }
+
+    RETURN_TYPES = (ANY,)
+    RETURN_NAMES = ("out",)
+    FUNCTION = "route"
+    CATEGORY = CATEGORY
+
+    def route(self, router_id="main", slot_types="[]", active_type="", project=None, **kwargs):
+        try:
+            types = json.loads(slot_types)
+            if not isinstance(types, list):
+                types = []
+        except (ValueError, TypeError):
+            types = []
+
+        val = None
+        if active_type and active_type in types:
+            val = kwargs.get(f"input_{types.index(active_type) + 1}")
+        if val is None:  # fall back to the first connected input
+            for i in range(1, MAX_SWITCH_INPUTS + 1):
+                v = kwargs.get(f"input_{i}")
+                if v is not None:
+                    val = v
+                    break
+        return (val,)
+
+
+# --------------------------------------------------------------------------- #
+# Node 6 — Bundle preview (formatted text for a Display node)
+# --------------------------------------------------------------------------- #
+
+class ProjectLogicPreview:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"project": ("PROJECT_LOGIC",)}}
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text",)
+    FUNCTION = "preview"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def preview(self, project):
+        if not isinstance(project, dict):
+            text = "(not a PROJECT_LOGIC bundle)"
+            return {"ui": {"text": [text]}, "result": (text,)}
+
+        lines = [
+            f"root: {project.get('root', '')}",
+            f"shot: {project.get('shot', '')}   seed: {project.get('seed', '')}",
+            "",
+        ]
+        for name, p in project.get("passes", {}).items():
+            extra = f"   frames={p['frame_count']}" if "frame_count" in p else ""
+            lines.append(f"[{name}]{extra}")
+            lines.append(f"  seq : {p.get('sequence_path', '')}")
+            lines.append(f"  dir : {p.get('directory', '')}")
+            lines.append(f"  file: {p.get('filename', '')}  (.{p.get('ext', '')})")
+        text = "\n".join(lines)
+        return {"ui": {"text": [text]}, "result": (text,)}
+
+
 NODE_CLASS_MAPPINGS = {
     "ProjectLogic": ProjectLogic,
     "ProjectLogicExtract": ProjectLogicExtract,
     "ProjectLogicPathSplit": ProjectLogicPathSplit,
+    "ProjectLogicRouterMaster": ProjectLogicRouterMaster,
+    "ProjectLogicRouterSlave": ProjectLogicRouterSlave,
+    "ProjectLogicPreview": ProjectLogicPreview,
 }
