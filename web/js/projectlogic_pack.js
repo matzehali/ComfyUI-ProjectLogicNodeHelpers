@@ -161,7 +161,7 @@ function traceLabels(node, inputName, depth = 0) {
   const src = sourceOf(node, inputName);
   if (!src) return null;
   const c = src.comfyClass;
-  if (c === "ProjectLogicPack") return readPackLabels(src);
+  if (c === "PackNoodles") return readPackLabels(src);
   if (c === "ProjectLogicRouterSlave") {
     for (const inp of src.inputs || []) {
       if (inp.link != null) {
@@ -233,8 +233,8 @@ app.registerExtension({
 
   async nodeCreated(node) {
     try {
-      if (node.comfyClass === "ProjectLogicPack") setupPacker(node);
-      else if (node.comfyClass === "ProjectLogicUnpack") setupUnpacker(node);
+      if (node.comfyClass === "PackNoodles") setupPacker(node);
+      else if (node.comfyClass === "UnpackNoodles") setupUnpacker(node);
     } catch (e) {
       console.error("[projectlogic] pack/unpack setup failed", node.comfyClass, e);
     }

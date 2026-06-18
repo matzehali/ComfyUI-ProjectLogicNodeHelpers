@@ -400,7 +400,7 @@ class ProjectLogicPreview:
 # Node 6 / 7 — Pack / Unpack (carry several labelled noodles on one wire)
 # --------------------------------------------------------------------------- #
 
-class ProjectLogicPack:
+class PackNoodles:
     """Bundle several labelled ANY inputs into one ``PL_GROUP`` noodle.
 
     Labels (one per input slot) are managed in JS — typed manually or, with
@@ -445,7 +445,7 @@ class ProjectLogicPack:
         return ({"labels": labels, "values": values},)
 
 
-class ProjectLogicUnpack:
+class UnpackNoodles:
     """Restore the labelled noodles from a ``PL_GROUP`` bundle.
 
     Output slots are renamed (in JS) to the bundle's labels — read upstream at
@@ -477,6 +477,6 @@ NODE_CLASS_MAPPINGS = {
     "ProjectLogicRouterMaster": ProjectLogicRouterMaster,
     "ProjectLogicRouterSlave": ProjectLogicRouterSlave,
     "ProjectLogicPreview": ProjectLogicPreview,
-    "ProjectLogicPack": ProjectLogicPack,
-    "ProjectLogicUnpack": ProjectLogicUnpack,
+    "PackNoodles": PackNoodles,
+    "UnpackNoodles": UnpackNoodles,
 }

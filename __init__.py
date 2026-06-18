@@ -13,8 +13,8 @@ try:
         "ProjectLogicRouterMaster": versioned_display_name(f"{PREFIX} Project Logic Router Master"),
         "ProjectLogicRouterSlave": versioned_display_name(f"{PREFIX} Project Logic Router Slave"),
         "ProjectLogicPreview": versioned_display_name(f"{PREFIX} Project Logic Preview"),
-        "ProjectLogicPack": versioned_display_name(f"{PREFIX} Pack Noodles"),
-        "ProjectLogicUnpack": versioned_display_name(f"{PREFIX} Unpack Noodles"),
+        "PackNoodles": versioned_display_name(f"{PREFIX} Pack Noodles"),
+        "UnpackNoodles": versioned_display_name(f"{PREFIX} Unpack Noodles"),
     }
 
     WEB_DIRECTORY = "./web"
