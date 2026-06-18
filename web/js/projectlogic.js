@@ -7,6 +7,8 @@ import {
   comboFromFn,
   consumerTypes,
   broadcastProjects,
+  fieldValue,
+  upstreamSourceNode,
 } from "./projectlogic_shared.js";
 
 // --------------------------------------------------------------------------- //
@@ -88,13 +90,17 @@ function debounce(fn, ms) {
   };
 }
 
+// Effective path: typed widget value, or the wired upstream string.
+function projectPath(node) {
+  return fieldValue(node, "project_path") || "";
+}
+
 async function refreshShots(node) {
-  const projectW = getWidget(node, "project_path");
   const shotW = getWidget(node, "shot");
-  if (!projectW || !shotW) return;
+  if (!shotW) return;
   const token = (node._plShotReq = (node._plShotReq || 0) + 1);
   const data = await fetchJSON(
-    `/projectlogic/subfolders?path=${encodeURIComponent(projectW.value || "")}`,
+    `/projectlogic/subfolders?path=${encodeURIComponent(projectPath(node))}`,
   );
   if (token !== node._plShotReq) return; // a newer scan superseded this one
   asCombo(shotW, data?.folders || []);
@@ -103,11 +109,10 @@ async function refreshShots(node) {
 }
 
 async function refreshPlates(node) {
-  const projectW = getWidget(node, "project_path");
   const shotW = getWidget(node, "shot");
   const plateW = getWidget(node, "plate_clip");
-  if (!projectW || !shotW || !plateW) return;
-  const root = (projectW.value || "").replace(/[\\/]+$/, "");
+  if (!shotW || !plateW) return;
+  const root = projectPath(node).replace(/[\\/]+$/, "");
   const shotDir = root && shotW.value ? `${root}/${shotW.value}` : root;
   const token = (node._plPlateReq = (node._plPlateReq || 0) + 1);
   const data = await fetchJSON(
@@ -164,6 +169,24 @@ function setupProjectNode(node) {
     () => refreshShots(node).then(() => refreshPlates(node)),
     600,
   );
+
+  // When project_path is wired, watch the upstream source's widget so its edits
+  // re-trigger a scan (and re-resolve on connect/disconnect).
+  function hookUpstream() {
+    const src = upstreamSourceNode(node, "project_path");
+    if (!src) return;
+    for (const w of src.widgets || []) {
+      if (w._plPathHooked) continue;
+      w._plPathHooked = true;
+      const prev = w.callback;
+      w.callback = function () {
+        prev?.apply(this, arguments);
+        broadcastProjects(); // keep config fresh immediately
+        debouncedScan();     // rescan once edits settle
+      };
+    }
+  }
+
   if (projectW) {
     const prev = projectW.callback;
     projectW.callback = function () {
@@ -171,6 +194,17 @@ function setupProjectNode(node) {
       debouncedScan();
     };
   }
+
+  // Wiring (or unwiring) the path input re-resolves and re-scans.
+  const occ = node.onConnectionsChange;
+  node.onConnectionsChange = function () {
+    occ?.apply(this, arguments);
+    setTimeout(() => {
+      hookUpstream();
+      broadcastProjects();
+      debouncedScan();
+    }, 30);
+  };
   // Picking a shot is a finished change -> rescan plates immediately.
   if (shotW) {
     const prev = shotW.callback;
@@ -194,12 +228,15 @@ function setupProjectNode(node) {
   node.addWidget("button", "↻ scan shots", null, () => refreshShots(node));
   node.addWidget("button", "↻ scan plate clips", null, () => refreshPlates(node));
 
-  const doRefresh = () => refreshShots(node).then(() => refreshPlates(node));
+  const doRefresh = () => {
+    hookUpstream();
+    return refreshShots(node).then(() => refreshPlates(node));
+  };
   setTimeout(doRefresh, 50);
   const onCfg = node.onConfigure;
   node.onConfigure = function () {
     onCfg?.apply(this, arguments);
-    setTimeout(doRefresh, 50);
+    setTimeout(doRefresh, 80);
   };
 }
 

@@ -60,6 +60,53 @@ export function upstreamNode(node, inputName) {
   return app.graph.getNodeById(link.origin_id);
 }
 
+// Trace a wired input through reroutes to the real source node.
+export function upstreamSourceNode(node, inputName) {
+  const slot = node.inputs?.find((i) => i.name === inputName);
+  if (!slot || slot.link == null) return null;
+  let link = app.graph.links[slot.link];
+  let guard = 0;
+  while (link && guard++ < 32) {
+    const src = app.graph.getNodeById(link.origin_id);
+    if (!src) return null;
+    if ((src.type || src.comfyClass) === "Reroute") {
+      const rin = src.inputs?.[0];
+      if (rin && rin.link != null) {
+        link = app.graph.links[rin.link];
+        continue;
+      }
+      return null;
+    }
+    return src;
+  }
+  return null;
+}
+
+// Best-effort string value produced by a (string/primitive) source node.
+function readStringOutput(node) {
+  if (!node?.widgets) return "";
+  const named = node.widgets.find(
+    (w) =>
+      typeof w.value === "string" &&
+      ["value", "text", "string", "path"].includes(String(w.name || "").toLowerCase()),
+  );
+  if (named) return named.value;
+  const anyStr = node.widgets.find((w) => typeof w.value === "string");
+  return anyStr ? anyStr.value : "";
+}
+
+// Resolve a field by name: a wired input is traced upstream to its string
+// value; otherwise the node's own widget value is used.
+export function fieldValue(node, name) {
+  const inSlot = node.inputs?.find((i) => i.name === name);
+  if (inSlot && inSlot.link != null) {
+    const src = upstreamSourceNode(node, name);
+    if (src) return readStringOutput(src);
+  }
+  const w = getWidget(node, name);
+  return w ? w.value : undefined;
+}
+
 function passesFromArr(arr) {
   const out = [];
   for (const r of Array.isArray(arr) ? arr : []) {
@@ -88,8 +135,7 @@ export function passesFromNode(hubNode) {
 function hubConfig(node) {
   const cfg = {};
   for (const f of CONFIG_FIELDS) {
-    const w = getWidget(node, f);
-    cfg[f] = w ? w.value : undefined;
+    cfg[f] = fieldValue(node, f);  // resolves wired inputs upstream
   }
   if (cfg.global_seed != null) cfg.global_seed = Number(cfg.global_seed) || 0;
   return cfg;

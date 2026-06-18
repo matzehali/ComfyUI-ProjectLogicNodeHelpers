@@ -66,6 +66,10 @@ the node** after a run — no separate Display node needed.
 
 ## Notes
 - Shot/plate dropdowns are populated by two read-only server routes
-  (`/projectlogic/subfolders`, `/projectlogic/sequences`). Without the JS layer the
-  fields still work as plain text entry.
+  (`/projectlogic/subfolders`, `/projectlogic/sequences`). Scans run on UI reload,
+  the manual ↻ buttons, and ~600ms after a path edit settles (not live).
+- `project_path` may be **typed or wired** from a string/primitive node. When wired,
+  the value is resolved by tracing the link upstream (through reroutes) to the source
+  node's widget, and the dropdowns re-scan on connection/upstream changes. The
+  resolved value is also folded into the broadcast config so consumers stay correct.
 - `framecount` is a count only (globs the `####` pattern); no start/end range.
