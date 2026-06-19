@@ -115,7 +115,10 @@ function applyScan(w, values) {
   w.type = "combo";
   w.options = w.options || {};
   w.options.values = ["", ...values];
-  if (!values.includes(w.value)) w.value = ""; // reset stale selection
+  // While busy the displayed value is the "scanning…" placeholder, so compare
+  // against the real prior selection — keep it if it still exists, else reset.
+  const current = w._plBusy ? (w._plPrevValue ?? "") : w.value;
+  w.value = values.includes(current) ? current : "";
 }
 
 function startResolving(node) {
