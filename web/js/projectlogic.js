@@ -127,11 +127,32 @@ function endResolving(node) {
   node.setDirtyCanvas?.(true, true);
 }
 
+// While a combo is being (re)scanned, show "scanning…" in it and disable it so
+// it can't be opened on stale options. applyScan() restores a real value; if no
+// scan landed, clearing busy restores the prior selection.
+const SCANNING_LABEL = "⏳ scanning…";
+function setComboBusy(w, busy) {
+  if (!w) return;
+  if (busy) {
+    if (!w._plBusy) {
+      w._plBusy = true;
+      w._plPrevValue = w.value;
+      w.value = SCANNING_LABEL;
+    }
+    w.disabled = true;
+  } else {
+    if (w._plBusy && w.value === SCANNING_LABEL) w.value = w._plPrevValue ?? "";
+    w._plBusy = false;
+    w.disabled = false;
+  }
+}
+
 async function refreshShots(node) {
   const shotW = getWidget(node, "shot");
   if (!shotW) return;
   const token = (node._plShotReq = (node._plShotReq || 0) + 1);
   startResolving(node);
+  setComboBusy(shotW, true);
   try {
     const data = await fetchJSON(
       `/projectlogic/subfolders?path=${encodeURIComponent(projectPath(node))}`,
@@ -141,6 +162,8 @@ async function refreshShots(node) {
     notifyChange();
   } finally {
     endResolving(node);
+    // Leave the busy state to the newer scan if this one was superseded.
+    if (token === node._plShotReq) setComboBusy(shotW, false);
   }
 }
 
@@ -152,6 +175,7 @@ async function refreshPlates(node) {
   const shotDir = root && shotW.value ? `${root}/${shotW.value}` : root;
   const token = (node._plPlateReq = (node._plPlateReq || 0) + 1);
   startResolving(node);
+  setComboBusy(plateW, true);
   try {
     const data = await fetchJSON(
       `/projectlogic/sequences?path=${encodeURIComponent(shotDir)}`,
@@ -161,29 +185,59 @@ async function refreshPlates(node) {
     notifyChange();
   } finally {
     endResolving(node);
+    // Leave the busy state to the newer scan if this one was superseded.
+    if (token === node._plPlateReq) setComboBusy(plateW, false);
   }
 }
 
-// A small animated spinner while the node is resolving names.
+// A prominent "busy" badge across the node's title bar while folders are being
+// scanned, so it's obvious the dropdowns aren't ready yet.
 function installSpinner(node) {
   const prev = node.onDrawForeground;
   node.onDrawForeground = function (ctx) {
     prev?.apply(this, arguments);
     if (!this._plResolving || this.flags?.collapsed) return;
-    const cx = this.size[0] - 16;
-    const cy = 12;
-    const a = (Date.now() / 150) % (Math.PI * 2);
+
+    const label = "scanning folders…";
+    const r = 6; // spinner radius
     ctx.save();
+    ctx.font = "11px sans-serif";
+    const textW = ctx.measureText(label).width;
+    const padX = 8;
+    const gap = 7;
+    const pillH = 20;
+    const pillW = padX + r * 2 + gap + textW + padX;
+    // Right side of the title bar, clear of the left-aligned node title.
+    const px = this.size[0] - pillW - 6;
+    const py = -pillH - 5;
+
+    // Pill background.
+    ctx.fillStyle = "rgba(20,28,38,0.92)";
     ctx.strokeStyle = "#66ccff";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(cx, cy, 6, a, a + Math.PI * 1.5);
+    ctx.roundRect(px, py, pillW, pillH, pillH / 2);
+    ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = "#9cf";
-    ctx.font = "9px sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText("resolving…", cx - 12, cy + 3);
+
+    // Rotating arc.
+    const a = (Date.now() / 130) % (Math.PI * 2);
+    const cx = px + padX + r;
+    const cy = py + pillH / 2;
+    ctx.strokeStyle = "#9cf";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, a, a + Math.PI * 1.4);
+    ctx.stroke();
+
+    // Label.
+    ctx.fillStyle = "#cfeaff";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, cx + r + gap, cy + 0.5);
     ctx.restore();
+
     requestAnimationFrame(() => this.setDirtyCanvas?.(true, true));
   };
 }
