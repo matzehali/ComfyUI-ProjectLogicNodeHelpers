@@ -27,6 +27,7 @@ import json
 import os
 
 from .paths import (
+    _SEQ_FILE_RE,
     DEFAULT_TEMPLATE,
     OUTPUT_TEMPLATE,
     count_sequence,
@@ -509,6 +510,26 @@ class UnpackNoodles:
 # Node 8 — SelectPath (native OS file/folder picker -> string)
 # --------------------------------------------------------------------------- #
 
+def _replace_frame_number(path: str, style: str) -> str:
+    """Swap a single file's frame number (last digit block before the extension).
+
+    ``style`` is ``"####"`` (same count of ``#``, e.g. ``shot.0042.exr`` ->
+    ``shot.####.exr``) or ``"*"`` (a single ``*``, e.g. ``shot.*.exr``). Any
+    other value, or a name with no digit block right before the extension, is
+    returned unchanged. Reuses the pack's sequence convention (``_SEQ_FILE_RE``)
+    so the output stays consistent with scan_sequences / count_sequence.
+    """
+    if not path or style not in ("####", "*"):
+        return path
+    directory, base = os.path.split(path)
+    m = _SEQ_FILE_RE.match(base)
+    if not m:
+        return path
+    prefix, digits, ext = m.groups()
+    token = "#" * len(digits) if style == "####" else "*"
+    return os.path.join(directory, f"{prefix}{token}{ext}")
+
+
 class ProjectLogicSelectPath:
     """Pick a path with the native OS dialog (Browse button) and output it."""
 
@@ -518,6 +539,14 @@ class ProjectLogicSelectPath:
             "required": {
                 "path": ("STRING", {"default": "", "tooltip": "Selected path (set by Browse, or typed)."}),
                 "mode": (["folder", "file"], {"default": "folder"}),
+                "sequence_pattern": (["off", "####", "*"], {
+                    "default": "off",
+                    "tooltip": (
+                        "File mode only: replace the frame number (last digit block before the "
+                        "extension). '####' keeps the padding as # of matching width (e.g. "
+                        "shot.0042.exr -> shot.####.exr); '*' uses a single * (e.g. shot.*.exr)."
+                    ),
+                }),
             },
         }
 
@@ -530,7 +559,9 @@ class ProjectLogicSelectPath:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def get_path(self, path, mode="folder"):
+    def get_path(self, path, mode="folder", sequence_pattern="off"):
+        if mode == "file":
+            path = _replace_frame_number(path, sequence_pattern)
         return (path,)
 
 
