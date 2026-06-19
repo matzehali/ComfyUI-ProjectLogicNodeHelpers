@@ -139,9 +139,29 @@ function applyScan(w, values) {
   w.type = "combo";
   w.options = w.options || {};
   w.options.values = ["", ...values];
-  // Keep the prior selection if it still exists in the fresh scan, else reset.
-  const current = comboValue(w);
-  w.value = values.includes(current) ? current : "";
+  // Restore the user's last explicit pick if the fresh scan still has it. The
+  // pick is cached in _plDesired (set only when the user changes the dropdown,
+  // see rememberPick), so a path that lacks it blanks the widget for now but
+  // keeps the cache — a later scan that does contain it (path reconnected or
+  // retyped by hand) restores the original selection. Fall back to the live
+  // value before any pick has been remembered (e.g. a freshly loaded node).
+  const desired = w._plDesired ?? comboValue(w);
+  w.value = desired && values.includes(desired) ? desired : "";
+}
+
+// Cache the user's explicit dropdown pick so it survives a path change that
+// hides it. Only a real user interaction reaches here (applyScan sets the value
+// programmatically, which doesn't fire the callback), so this is the one place
+// the cache is overwritten — exactly the "path changed, then dropdown changed"
+// case. Ignored while busy, when the value is the transient scanning placeholder.
+function rememberPick(w) {
+  if (w && !w._plBusy) w._plDesired = w.value;
+}
+
+// Seed the cache from a freshly loaded selection so the first path change can
+// already restore it. Never clobbers an in-session pick.
+function seedDesired(w) {
+  if (w && w._plDesired == null && w.value) w._plDesired = w.value;
 }
 
 function startResolving(node) {
@@ -375,6 +395,9 @@ function setupProjectNode(node) {
     const prev = w.callback;
     w.callback = function () {
       prev?.apply(this, arguments);
+      // A user pick on a combo overwrites its cached desire; from then on a path
+      // change restores this value, not the previously cached one.
+      if (f === "shot" || f === "plate_clip") rememberPick(w);
       notifyChange();
     };
   }
@@ -387,6 +410,10 @@ function setupProjectNode(node) {
   const doRefresh = () => {
     hookUpstream();
     syncPathFromUpstream(node);
+    // Seed the dropdown caches from any loaded selection so the very first path
+    // change can already restore them instead of losing the value.
+    seedDesired(shotW);
+    seedDesired(plateW);
     return scanAll();
   };
   setTimeout(doRefresh, 50);
