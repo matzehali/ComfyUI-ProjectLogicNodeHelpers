@@ -9,10 +9,10 @@ Nodes:
 * ``ProjectLogicExtract``     – selects a configured pass (dropdown auto-filled from
                                the project) and emits full_path / pathtofile / file /
                                framecount / seed.
-* ``ProjectLogicRouterMaster``– broadcast selector: sets the active pass type for a
-                               ``router_id`` (no output noodles).
-* ``ProjectLogicRouterSlave`` – follower mux: routes the labelled input matching the
-                               master's active type to its output.
+* ``ProjectLogicRouterMaster``– broadcast selector: defines its own ordered list of
+                               switch values and sets the active one (no output noodles).
+* ``ProjectLogicRouterSlave`` – follower mux: labels/orders its inputs from the master's
+                               option list and routes the one matching the active value.
 * ``ProjectLogicPreview``     – shows the resolved bundle inline on the node.
 
 Consumers accept either a wired ``PROJECT_LOGIC`` input or the broadcast config the
@@ -303,11 +303,13 @@ class ProjectLogicExtract:
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicRouterMaster:
-    """Master selector. Picks the active pass type for its router group.
+    """Master selector. Picks the active value from its own switch-option list.
 
     Identity is the node's own id (stable, unique); ``label`` is a free, editable
     title (duplicates allowed). Slaves reference the id, not the label, so renaming
-    never breaks the link. Drives followers purely via the frontend broadcast layer.
+    never breaks the link. The switch values are defined here in ``options_json``
+    (an ordered list, edited via the JS options editor) — slaves label and order
+    their inputs from it. Drives followers purely via the frontend broadcast layer.
     """
 
     @classmethod
@@ -315,7 +317,10 @@ class ProjectLogicRouterMaster:
         return {
             "required": {
                 "label": ("STRING", {"default": "", "tooltip": "Editable title for this router (duplicates OK). Slaves link by the node's unique id, not this."}),
-                "active": ("STRING", {"default": "base", "tooltip": "Active pass type (dropdown from the project's passes)."}),
+                "active": ("STRING", {"default": "", "tooltip": "Active switch value (dropdown from this router's options)."}),
+                # JS-managed ordered list of switch values; the options editor is
+                # the real UI. Slaves mirror this for their input labels/order.
+                "options_json": ("STRING", {"default": "[\"ON\", \"OFF\"]"}),
             },
         }
 
@@ -324,7 +329,7 @@ class ProjectLogicRouterMaster:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
 
-    def noop(self, label="", active="base"):
+    def noop(self, label="", active="", options_json="[]"):
         return {"ui": {"active": [active]}}
 
 

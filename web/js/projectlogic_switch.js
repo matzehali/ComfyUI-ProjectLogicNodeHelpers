@@ -3,24 +3,54 @@ import {
   getWidget,
   hideWidget,
   comboFromFn,
-  consumerTypes,
 } from "./projectlogic_shared.js";
 
 // --------------------------------------------------------------------------- //
-// Active-pass broadcast router (Stamps-style identity).
+// Switch broadcast router (Stamps-style identity).
 //
 // A Router Master's identity is its **node id** (stable, unique); its `label` is a
-// free editable title (duplicates allowed). A Router Slave stores that node id in
-// `router_id` and picks it via a `master` dropdown that shows labels (duplicate
-// labels are disambiguated as "label (id)"). Renaming a master never breaks the
-// link, and same-named masters stay distinguishable.
+// free editable title (duplicates allowed). The master owns an ordered list of
+// switch values (`options_json`, edited via the options editor) and picks the
+// active one. A Router Slave stores the master's node id in `router_id` (picked
+// via a `master` dropdown of labels, disambiguated as "label (id)") and mirrors
+// the master's option list to label/order its inputs. Renaming a master never
+// breaks the link, and same-named masters stay distinguishable.
 // --------------------------------------------------------------------------- //
 
 const MAX_INPUTS = 16;
 const NONE = "— none —";
 
-// master id -> active type, shared across the graph.
+// master id -> active value, shared across the graph.
 const ACTIVE = {};
+
+// Parse a master's options_json into a clean, de-duplicated, ordered string list.
+function parseOptions(json) {
+  let arr;
+  try {
+    arr = JSON.parse(json || "[]");
+  } catch (e) {
+    return [];
+  }
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const s of arr) {
+    if (typeof s !== "string") continue;
+    const v = s.trim();
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+// The switch values a master defines (its own list), by node or by id.
+function masterOptionsOf(node) {
+  return parseOptions(getWidget(node, "options_json")?.value);
+}
+function masterOptionsById(id) {
+  const n = (app.graph?._nodes || []).find(
+    (m) => m.comfyClass === "ProjectLogicRouterMaster" && String(m.id) === String(id),
+  );
+  return n ? masterOptionsOf(n) : [];
+}
 
 // ------------------------------- masters ----------------------------------- //
 function masterNodes() {
@@ -64,13 +94,130 @@ function broadcast(id, val) {
   }
 }
 
+// Editable, ordered list of switch values, backed by the hidden options_json
+// widget. Mirrors the hub's pass-line editor: a trailing blank line spawns a new
+// one once filled. onChange fires after every committed edit.
+function buildOptionsEditor(node, onChange) {
+  const optW = getWidget(node, "options_json");
+  if (!optW) return;
+  hideWidget(optW);
+
+  let rows;
+  try {
+    rows = JSON.parse(optW.value || "[]");
+    if (!Array.isArray(rows)) rows = [];
+  } catch (e) {
+    rows = [];
+  }
+  rows = rows.filter((s) => typeof s === "string");
+
+  const container = document.createElement("div");
+  container.style.cssText =
+    "display:flex;flex-direction:column;gap:3px;padding:4px 2px;font-family:sans-serif;";
+  let domWidget;
+
+  // Drop blank lines, then keep exactly one trailing blank to type into.
+  function normalize() {
+    rows = rows.filter((s) => s.trim() !== "");
+    rows.push("");
+  }
+
+  // Persist the list to the hidden widget (cheap; safe to call per keystroke).
+  function writeOptions() {
+    optW.value = JSON.stringify(rows.map((s) => s.trim()).filter((s) => s !== ""));
+  }
+  // Persist and propagate to active/slaves — only at commit points, not per key.
+  function commit() {
+    writeOptions();
+    onChange?.();
+  }
+
+  function render() {
+    normalize();
+    container.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.textContent = "switch options";
+    header.style.cssText =
+      "color:#888;font-size:10px;text-transform:uppercase;letter-spacing:1px;";
+    container.appendChild(header);
+
+    rows.forEach((val, idx) => {
+      const isBlank = val.trim() === "";
+      const line = document.createElement("div");
+      line.style.cssText =
+        "display:grid;grid-template-columns:1fr auto;gap:3px;align-items:center;";
+
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.value = val;
+      inp.placeholder = isBlank ? "new value… (e.g. ON)" : "";
+      inp.style.cssText =
+        "background:#222;color:#ddd;border:1px solid #444;border-radius:4px;font-size:11px;padding:1px 4px;min-width:0;";
+      // Live-update the value without re-rendering (so typing keeps focus);
+      // spawn the next blank line only once the field is committed (blur/enter).
+      inp.addEventListener("input", () => {
+        rows[idx] = inp.value;
+        writeOptions(); // persist only; reconfigure slaves on commit (below)
+      });
+      inp.addEventListener("change", () => {
+        rows[idx] = inp.value;
+        commit();
+        render();
+      });
+      line.appendChild(inp);
+
+      const rm = document.createElement("button");
+      rm.textContent = isBlank ? "+" : "×";
+      rm.title = isBlank ? "add line" : "remove line";
+      rm.style.cssText =
+        "background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;width:20px;";
+      rm.addEventListener("click", () => {
+        if (isBlank) {
+          inp.focus();
+        } else {
+          rows.splice(idx, 1);
+          commit();
+          render();
+        }
+      });
+      line.appendChild(rm);
+      container.appendChild(line);
+    });
+
+    const h = Math.max(60, container.scrollHeight + 8);
+    if (domWidget) domWidget.computeSize = () => [node.size[0], h];
+    node.setSize?.(node.computeSize());
+    node.setDirtyCanvas?.(true, true);
+  }
+
+  domWidget = node.addDOMWidget("options_editor", "div", container, {
+    serialize: false,
+    hideOnZoom: false,
+  });
+
+  commit();
+  render();
+}
+
 function setupMaster(node) {
   const labelW = getWidget(node, "label");
   const actW = getWidget(node, "active");
   if (!actW) return;
 
-  comboFromFn(actW, () => consumerTypes(node), "base");
+  comboFromFn(actW, () => masterOptionsOf(node), "");
   const myId = () => String(node.id);
+
+  // Keep `active` valid against the current option list and push the change out.
+  function syncActive() {
+    const opts = masterOptionsOf(node);
+    if (opts.length && !opts.includes(actW.value)) actW.value = opts[0];
+    if (!opts.length) actW.value = "";
+    broadcast(myId(), actW.value);
+    reconfigureAllSlaves(); // relabel/reorder slave inputs to the new options
+  }
+
+  buildOptionsEditor(node, syncActive);
 
   const prevAct = actW.callback;
   actW.callback = function () {
@@ -108,8 +255,7 @@ function setupMaster(node) {
 
   setTimeout(() => {
     if (labelW && !labelW.value) labelW.value = `Router ${node.id}`;
-    reconfigureAllSlaves();
-    broadcast(myId(), actW.value);
+    syncActive(); // seed `active` from the option list and broadcast
   }, 60);
 }
 
@@ -142,12 +288,15 @@ function configureSlave(node) {
   const masterW = getWidget(node, "master");
   const ridW = getWidget(node, "router_id");
   const actW = getWidget(node, "active_type");
-  const types = consumerTypes(node);
-  if (types.length) reconcileInputs(node, types); // never wipe when project unknown
 
   const id = ridW?.value || "";
   const m = id ? masterById(id) : null;
   node._plNoMaster = !m; // no resolved master (none selected, or missing)
+
+  // Inputs are labelled/ordered from the linked master's option list. Don't wipe
+  // existing slots when the master is momentarily unresolved (e.g. mid-load).
+  const types = id ? masterOptionsById(id) : [];
+  if (types.length) reconcileInputs(node, types);
 
   if (masterW) {
     if (m) masterW.value = m.display;        // reflect current (possibly renamed) title
@@ -181,7 +330,8 @@ function installActiveLink(node) {
     if (!this.outputs?.length) return;
     const active = getWidget(this, "active_type")?.value;
     if (!active) return;
-    const idx = consumerTypes(this).indexOf(active);
+    const id = getWidget(this, "router_id")?.value || "";
+    const idx = masterOptionsById(id).indexOf(active);
     if (idx < 0) return;
     const inSlot = this.inputs?.findIndex((i) => i.name === `input_${idx + 1}`);
     if (inSlot == null || inSlot < 0) return;
@@ -241,9 +391,6 @@ function setupFollower(node) {
   installActiveLink(node);
   setTimeout(() => configureSlave(node), 50);
 }
-
-// When the hub config changes, relabel every slave's input slots.
-window.addEventListener("projectlogic:changed", reconfigureAllSlaves);
 
 // ----------------------------- registration -------------------------------- //
 app.registerExtension({

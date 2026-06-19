@@ -30,7 +30,8 @@ the frame-number padding; it is dropped for `movie` passes. The implicit
 There is exactly **one Project Logic hub** per workflow (a second one is auto-removed
 with a popup). It has **no output noodle** and consumers have **no project input** —
 Extract / Preview read the hub's settings straight from the submitted **prompt** at run
-time, and the router reads the hub's pass list in the editor. Nothing to wire.
+time. (The Router Master/Slave are independent of the hub — the master defines its own
+switch values.) Nothing to wire.
 
 ### Project Logic Hub
 Inputs: `project_path`, `shot` (dropdown of subfolders), `plate_clip` (dropdown of
@@ -55,18 +56,21 @@ the **ComfyUI server host**, so it's meant for local use.
 * CoCo **EXR sequence loader**: `full_path` → `sequence_path`.
 
 ### Project Logic Router Master / Router Slave
-A wireless "active pass" router so one dropdown reroutes the whole graph.
+A wireless switch so one dropdown reroutes the whole graph.
 
-* **Router Master** — pick the active pass type. Its identity is the node's own
-  **unique id**; `label` is a free, editable title (**duplicates are fine**). `active`
-  is a dropdown of the project's passes. No output noodles.
-* **Router Slave** — a mux whose `ANY` input slots **are the project's pass types**
-  (each slot is labelled with a pass; slot names stay input_N so links survive save/load). The **`master` dropdown** lists master titles
-  (same-named masters shown as `title (id)`) and stores the master's **unique id**, so
-  the link survives renames and never confuses two equally-named masters. Outputs the
-  input matching the master's active type and **draws a link from the active input to
-  the output**; with no master it shows a red "no Router Master" note. Renaming a
-  master's title only updates the displayed name — the link (by id) is unchanged.
+* **Router Master** — defines its **own ordered list of switch values** in a small
+  **options editor** (e.g. `ON`/`OFF`, or several IC-LoRA names; a trailing blank line
+  spawns a new one once filled) and picks the `active` one from that list. Its identity
+  is the node's own **unique id**; `label` is a free, editable title (**duplicates are
+  fine**). No output noodles.
+* **Router Slave** — a mux whose `ANY` input slots **mirror the linked master's option
+  list**, labelled and ordered to match (slot names stay input_N so links survive
+  save/load). The **`master` dropdown** lists master titles (same-named masters shown as
+  `title (id)`) and stores the master's **unique id**, so the link survives renames and
+  never confuses two equally-named masters. Outputs the input matching the master's
+  active value and **draws a link from the active input to the output**; with no master
+  it shows a red "no Router Master" note. Renaming a master's title only updates the
+  displayed name — the link (by id) is unchanged.
 
 ### Pack Noodles / Unpack Noodles
 Carry several labelled noodles on a single wire — e.g. to route a whole group through
