@@ -97,16 +97,32 @@ function debounce(fn, ms) {
   };
 }
 
-// Effective path: typed widget value, or the wired upstream string. When wired,
-// reflect the resolved value back into the widget so it shows the real input.
+// Effective path used for scanning. The project_path widget is the single
+// source of truth and is kept synced from any wired upstream by
+// syncPathFromUpstream(). Reading the widget (not the live link) means a
+// disconnect retains the last value instead of blanking the scan — which would
+// otherwise wrongly clear shot/plate.
 function projectPath(node) {
-  const v = fieldValue(node, "project_path") || "";
+  const w = getWidget(node, "project_path");
+  return (w && w.value) || "";
+}
+
+// Copy a wired upstream path into the project_path widget so it persists and
+// stays visible. Returns true only when the value actually changed, so callers
+// can rescan on a genuinely new path but skip a disconnect or a reconnect of the
+// same path. A disconnected or not-yet-resolved input leaves the cached widget
+// value untouched, so an accidental unplug doesn't trash the selection.
+function syncPathFromUpstream(node) {
   const inSlot = node.inputs?.find((i) => i.name === "project_path");
-  if (inSlot && inSlot.link != null) {
-    const w = getWidget(node, "project_path");
-    if (w && w.value !== v) w.value = v;
+  if (!inSlot || inSlot.link == null) return false; // disconnected: retain
+  const v = fieldValue(node, "project_path") || "";
+  if (!v) return false; // upstream not resolved yet: retain
+  const w = getWidget(node, "project_path");
+  if (w && w.value !== v) {
+    w.value = v;
+    return true; // a genuinely different path arrived
   }
-  return v;
+  return false;
 }
 
 // Set a combo's options to a fresh scan; reset the selection if the current
@@ -296,11 +312,14 @@ function setupProjectNode(node) {
   asCombo(plateW, [""]);
   installSpinner(node);
 
-  // Path edits are debounced so the scan fires only once typing settles.
-  const debouncedScan = debounce(
-    () => refreshShots(node).then(() => refreshPlates(node)),
-    600,
-  );
+  const scanAll = () => refreshShots(node).then(() => refreshPlates(node));
+
+  // Path edits are debounced so the scan fires only once typing settles. Sync
+  // first so an upstream edit lands in the widget before the scan reads it.
+  const debouncedScan = debounce(() => {
+    syncPathFromUpstream(node);
+    scanAll();
+  }, 600);
 
   // When project_path is wired, watch the upstream source's widget so its edits
   // re-trigger a scan (and re-resolve on connect/disconnect).
@@ -327,14 +346,17 @@ function setupProjectNode(node) {
     };
   }
 
-  // Wiring (or unwiring) the path input re-resolves and re-scans.
+  // Connecting a path feeds its value into the widget; rescan only when that
+  // value actually changed. A disconnect or a reconnect of the same path keeps
+  // the cached widget value, so shot/plate survive an accidental unplug.
   const occ = node.onConnectionsChange;
   node.onConnectionsChange = function () {
     occ?.apply(this, arguments);
     setTimeout(() => {
       hookUpstream();
+      const changed = syncPathFromUpstream(node);
       notifyChange();
-      debouncedScan();
+      if (changed) debouncedScan();
     }, 30);
   };
   // Picking a shot is a finished change -> rescan plates immediately.
@@ -357,13 +379,15 @@ function setupProjectNode(node) {
     };
   }
 
-  node.addWidget("button", "↻ rescan", null, () =>
-    refreshShots(node).then(() => refreshPlates(node)),
-  );
+  node.addWidget("button", "↻ rescan", null, () => {
+    syncPathFromUpstream(node);
+    scanAll();
+  });
 
   const doRefresh = () => {
     hookUpstream();
-    return refreshShots(node).then(() => refreshPlates(node));
+    syncPathFromUpstream(node);
+    return scanAll();
   };
   setTimeout(doRefresh, 50);
   const onCfg = node.onConfigure;
