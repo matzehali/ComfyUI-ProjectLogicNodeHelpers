@@ -111,13 +111,20 @@ function projectPath(node) {
 
 // Set a combo's options to a fresh scan; reset the selection if the current
 // value no longer exists (so a stale shot/plate becomes unselected, not kept).
+// The logical value of a combo: while busy the displayed value is the
+// "scanning…" placeholder, so fall back to the stashed real selection. Any code
+// that drives logic off a combo's value must read it through this.
+function comboValue(w) {
+  if (!w) return "";
+  return w._plBusy ? (w._plPrevValue ?? "") : w.value;
+}
+
 function applyScan(w, values) {
   w.type = "combo";
   w.options = w.options || {};
   w.options.values = ["", ...values];
-  // While busy the displayed value is the "scanning…" placeholder, so compare
-  // against the real prior selection — keep it if it still exists, else reset.
-  const current = w._plBusy ? (w._plPrevValue ?? "") : w.value;
+  // Keep the prior selection if it still exists in the fresh scan, else reset.
+  const current = comboValue(w);
   w.value = values.includes(current) ? current : "";
 }
 
@@ -175,7 +182,10 @@ async function refreshPlates(node) {
   const plateW = getWidget(node, "plate_clip");
   if (!shotW || !plateW) return;
   const root = projectPath(node).replace(/[\\/]+$/, "");
-  const shotDir = root && shotW.value ? `${root}/${shotW.value}` : root;
+  // Read the real shot, never the transient "scanning…" placeholder, so an
+  // in-flight shot scan can't send this lookup to a bogus directory.
+  const shot = comboValue(shotW);
+  const shotDir = root && shot ? `${root}/${shot}` : root;
   const token = (node._plPlateReq = (node._plPlateReq || 0) + 1);
   startResolving(node);
   setComboBusy(plateW, true);
