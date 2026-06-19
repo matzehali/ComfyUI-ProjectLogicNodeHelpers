@@ -332,6 +332,14 @@ function setupProjectNode(node) {
   asCombo(plateW, [""]);
   installSpinner(node);
 
+  // ComfyUI hard-codes the INT "control_after_generate" widget to "fixed" and
+  // never serializes it, so the seed would never advance between runs. Flip the
+  // seed's linked control widget to "randomize" on creation; the user can still
+  // switch it back to "fixed" for the session.
+  const seedW = getWidget(node, "global_seed");
+  const seedCtl = seedW?.linkedWidgets?.[0] || getWidget(node, "control_after_generate");
+  if (seedCtl?.options?.values?.includes?.("randomize")) seedCtl.value = "randomize";
+
   const scanAll = () => refreshShots(node).then(() => refreshPlates(node));
 
   // Path edits are debounced so the scan fires only once typing settles. Sync
@@ -442,15 +450,24 @@ function buildPassEditor(node) {
   if (!passesW) return;
   hideWidget(passesW);
 
-  let rows;
-  try {
-    rows = JSON.parse(passesW.value || "[]");
-    if (!Array.isArray(rows)) rows = [];
-  } catch (e) {
-    rows = [];
+  let rows = [];
+
+  // Parse the (hidden) passes_json widget into editor rows. Called again from
+  // onConfigure: ComfyUI restores saved widget values *after* nodeCreated runs,
+  // so without a reload the editor keeps the defaults captured here and would
+  // overwrite the user's saved passes on the next edit.
+  function loadRows() {
+    let parsed;
+    try {
+      parsed = JSON.parse(passesW.value || "[]");
+      if (!Array.isArray(parsed)) parsed = [];
+    } catch (e) {
+      parsed = [];
+    }
+    rows = normalizeRows(parsed.map((r) => Object.assign(blankRow(), r)));
   }
-  rows = rows.map((r) => Object.assign(blankRow(), r));
-  rows = normalizeRows(rows);
+
+  loadRows();
 
   const container = document.createElement("div");
   container.style.cssText =
@@ -574,6 +591,18 @@ function buildPassEditor(node) {
 
   commit();
   render();
+
+  // ComfyUI restores the saved passes_json *after* this node was created, so
+  // re-read it once configuration lands and repaint the editor — without an
+  // extra commit, which would clobber the just-restored value.
+  const onCfg = node.onConfigure;
+  node.onConfigure = function () {
+    onCfg?.apply(this, arguments);
+    setTimeout(() => {
+      loadRows();
+      render();
+    }, 0);
+  };
 }
 
 // --------------------------------------------------------------------------- //
