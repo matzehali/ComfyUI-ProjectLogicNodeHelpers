@@ -1,5 +1,11 @@
 # ComfyUI-ProjectLogicNodeHelpers
 
+> [!NOTE]
+> Cross-project architecture, porting, and workflow knowledge is maintained in
+> the sibling [`MLX-wiki`](../MLX-wiki/README.md) (`coding/MLX-wiki`). Agents
+> changing this project must follow [`MLX-wiki/AGENTS.md`](../MLX-wiki/AGENTS.md)
+> and update the workflow inventory when its node contract or adopters change.
+
 Project/shot-driven path nodes for VFX workflows. Start a graph from one **hub
 node** (project folder + shot + plate clip + seed + the passes you care about)
 and pull any derived path, filename or frame count through **a single wire** into
@@ -54,6 +60,10 @@ the **ComfyUI server host**, so it's meant for local use.
 * CoCo **SaverNode**: `pathtofile` → `file_path`, `file` → `filename` (set the
   saver's `file_type` to your pass ext).
 * CoCo **EXR sequence loader**: `full_path` → `sequence_path`.
+
+### Project Logic Constants
+Reads the same hub config as Extract and emits only workflow-wide values:
+`global_frames` (derived from the plate/base length) and `seed`.
 
 ### Project Logic Router Master / Router Slave
 A wireless switch so one dropdown reroutes the whole graph.

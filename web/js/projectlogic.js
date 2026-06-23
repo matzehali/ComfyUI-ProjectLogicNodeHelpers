@@ -606,8 +606,8 @@ function buildPassEditor(node) {
 }
 
 // --------------------------------------------------------------------------- //
-// Consumers (Extract / Preview): config comes from the PROMPT at run time, so
-// the only edit-time job is the pass_name dropdown (Extract).
+// Consumers (Extract / Constants / Preview): config comes from the PROMPT at
+// run time, so the only edit-time job is the pass_name dropdown (Extract).
 // --------------------------------------------------------------------------- //
 function setupConsumer(node, withPassName) {
   if (withPassName) {

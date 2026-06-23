@@ -9,6 +9,7 @@ Nodes:
 * ``ProjectLogicExtract``     – selects a configured pass (dropdown auto-filled from
                                the project) and emits full_path / pathtofile / file /
                                framecount / seed.
+* ``ProjectLogicConstants``   – emits workflow-wide constants: global_frames / seed.
 * ``ProjectLogicRouterMaster``– broadcast selector: defines its own ordered list of
                                switch values and sets the active one (no output noodles).
 * ``ProjectLogicRouterSlave`` – follower mux: labels/orders its inputs from the master's
@@ -301,7 +302,41 @@ class ProjectLogicExtract:
 
 
 # --------------------------------------------------------------------------- #
-# Node 3 — Router Master (broadcast control, no output noodles)
+# Node 3 — constants (global frames + seed)
+# --------------------------------------------------------------------------- #
+
+class ProjectLogicConstants:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "hidden": {"prompt": "PROMPT"},
+        }
+
+    RETURN_TYPES = ("INT", "INT")
+    RETURN_NAMES = ("global_frames", "seed")
+    FUNCTION = "constants"
+    CATEGORY = CATEGORY
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def constants(self, prompt=None):
+        bundle = _bundle_from_prompt(prompt)
+        if bundle is None:
+            raise ValueError(
+                "ProjectLogicConstants: no Project Logic node found in the workflow."
+            )
+
+        return (
+            int(base_frame_count(bundle) or 0),
+            int(bundle.get("seed", 0)),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Node 4 — Router Master (broadcast control, no output noodles)
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicRouterMaster:
@@ -336,7 +371,7 @@ class ProjectLogicRouterMaster:
 
 
 # --------------------------------------------------------------------------- #
-# Node 4 — Router Slave (follower mux: many ANY inputs -> the active one)
+# Node 5 — Router Slave (follower mux: many ANY inputs -> the active one)
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicRouterSlave:
@@ -391,7 +426,7 @@ class ProjectLogicRouterSlave:
 
 
 # --------------------------------------------------------------------------- #
-# Node 5 — Bundle preview (shown inline on the node by the JS layer)
+# Node 6 — Bundle preview (shown inline on the node by the JS layer)
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicPreview:
@@ -439,7 +474,7 @@ class ProjectLogicPreview:
 
 
 # --------------------------------------------------------------------------- #
-# Node 6 / 7 — Pack / Unpack (carry several labelled noodles on one wire)
+# Node 7 / 8 — Pack / Unpack (carry several labelled noodles on one wire)
 # --------------------------------------------------------------------------- #
 
 class PackNoodles:
@@ -514,7 +549,7 @@ class UnpackNoodles:
 
 
 # --------------------------------------------------------------------------- #
-# Node 8 — SelectPath (native OS file/folder picker -> string)
+# Node 9 — SelectPath (native OS file/folder picker -> string)
 # --------------------------------------------------------------------------- #
 
 def _replace_frame_number(path: str, style: str) -> str:
@@ -575,6 +610,7 @@ class ProjectLogicSelectPath:
 NODE_CLASS_MAPPINGS = {
     "ProjectLogic": ProjectLogic,
     "ProjectLogicExtract": ProjectLogicExtract,
+    "ProjectLogicConstants": ProjectLogicConstants,
     "ProjectLogicSelectPath": ProjectLogicSelectPath,
     "ProjectLogicRouterMaster": ProjectLogicRouterMaster,
     "ProjectLogicRouterSlave": ProjectLogicRouterSlave,

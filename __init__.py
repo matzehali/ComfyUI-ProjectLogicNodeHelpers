@@ -10,6 +10,7 @@ try:
     NODE_DISPLAY_NAME_MAPPINGS = {
         "ProjectLogic": versioned_display_name(f"{PREFIX} Project Logic Hub"),
         "ProjectLogicExtract": versioned_display_name(f"{PREFIX} Project Logic Extract"),
+        "ProjectLogicConstants": versioned_display_name(f"{PREFIX} Project Logic Constants"),
         "ProjectLogicSelectPath": versioned_display_name(f"{PREFIX} Project Logic SelectPath"),
         "ProjectLogicRouterMaster": versioned_display_name(f"{PREFIX} Project Logic Router Master"),
         "ProjectLogicRouterSlave": versioned_display_name(f"{PREFIX} Project Logic Router Slave"),
