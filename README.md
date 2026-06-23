@@ -1,10 +1,6 @@
-# ComfyUI-ProjectLogicNodeHelpers
+> Agents: read `AGENTS.md` before working in this repo.
 
-> [!NOTE]
-> Cross-project architecture, porting, and workflow knowledge is maintained in
-> the sibling [`MLX-wiki`](../MLX-wiki/README.md) (`coding/MLX-wiki`). Agents
-> changing this project must follow [`MLX-wiki/AGENTS.md`](../MLX-wiki/AGENTS.md)
-> and update the workflow inventory when its node contract or adopters change.
+# ComfyUI-ProjectLogicNodeHelpers
 
 Project/shot-driven path nodes for VFX workflows. Start a graph from one **hub
 node** (project folder + shot + plate clip + seed + the passes you care about)
