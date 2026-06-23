@@ -3,3 +3,4 @@ __pycache__/
 .DS_Store
 .claude/
 AGENTS.md
+web/mlx_node_colors.js

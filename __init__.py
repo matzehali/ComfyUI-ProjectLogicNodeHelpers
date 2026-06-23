@@ -21,6 +21,14 @@ try:
 
     WEB_DIRECTORY = "./web"
 
+    # Copy the shared MLX node colors into our own web dir (we already serve ./web).
+    try:
+        import os as _os
+        from comfyui_mlx_helpers import install_node_colors as _install_node_colors
+        _install_node_colors(_os.path.join(_os.path.dirname(__file__), "web"))
+    except Exception:
+        pass
+
     # Best-effort server routes for the folder-scanning dropdowns.
     try:
         from .server import register_routes
