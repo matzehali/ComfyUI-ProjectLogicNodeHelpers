@@ -228,11 +228,14 @@ class ProjectLogic:
             "required": {
                 "project_path": ("STRING", {"default": "", "tooltip": "VFX root folder containing shot subfolders."}),
                 "shot": ("STRING", {"default": "", "tooltip": "Shot name / number (subfolder of project_path)."}),
-                # ComfyUI hard-codes the INT control widget's value to "fixed"
-                # (the node-def request is ignored for INT, and the widget is
-                # never serialized), so the JS layer flips it to "randomize" on
-                # creation. True here just gives the widget its proper label.
-                "global_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": True, "tooltip": "Global seed embedded into final output filenames ({seed} token)."}),
+                # control_after_generate gives the seed its randomize control, but
+                # ComfyUI only advances it on a FULL Queue Prompt: applyWidgetControl
+                # is gated on !isPartialExecution, so single-node / partial runs never
+                # randomize it. (The JS layer also force-sets the control to
+                # "randomize", since the INT control default is ignored/unserialized.)
+                # For per-run randomization on partial execution, wire an external
+                # seed node (e.g. rgthree Seed) into global_seed instead.
+                "global_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": True, "tooltip": "Global seed, embedded into output filenames via the {seed} token and broadcast to consumers. Auto-randomize only advances on a FULL Queue Prompt — ComfyUI skips it on partial / single-node execution. To randomize per run while executing individual nodes, drive this input from an external seed node (e.g. rgthree Seed)."}),
                 "default_template": ("STRING", {"default": DEFAULT_TEMPLATE, "tooltip": "Default path layout. Tokens: {root} {shot} {type} {ext} {seed}; #### = frame padding."}),
                 "output_template": ("STRING", {"default": OUTPUT_TEMPLATE, "tooltip": "Final-output layout (own subfolder, includes {seed})."}),
             },
