@@ -276,8 +276,24 @@ class ProjectLogicExtract:
     CATEGORY = CATEGORY
 
     @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        return float("nan")
+    def IS_CHANGED(cls, pass_name="base", prompt=None, **kwargs):
+        # Cache key = the resolved output, so downstream (e.g. the tracker) only
+        # re-runs when the extracted values actually change — not every execution.
+        # Falls back to "always changed" if the project bundle can't be resolved.
+        try:
+            bundle = _bundle_from_prompt(prompt)
+            if bundle is None:
+                return float("nan")
+            entry = _pass_for(bundle, pass_name)
+            return repr((
+                entry.get("sequence_path", ""),
+                entry.get("directory", ""),
+                entry.get("filename", ""),
+                int(base_frame_count(bundle) or 0),
+                int(bundle.get("seed", 0)),
+            ))
+        except Exception:
+            return float("nan")
 
     def extract(self, pass_name, prompt=None):
         bundle = _bundle_from_prompt(prompt)
@@ -319,8 +335,15 @@ class ProjectLogicConstants:
     CATEGORY = CATEGORY
 
     @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        return float("nan")
+    def IS_CHANGED(cls, prompt=None, **kwargs):
+        # Cache key = the resolved output (see ProjectLogicExtract).
+        try:
+            bundle = _bundle_from_prompt(prompt)
+            if bundle is None:
+                return float("nan")
+            return repr((int(base_frame_count(bundle) or 0), int(bundle.get("seed", 0))))
+        except Exception:
+            return float("nan")
 
     def constants(self, prompt=None):
         bundle = _bundle_from_prompt(prompt)
@@ -597,10 +620,9 @@ class ProjectLogicSelectPath:
     FUNCTION = "get_path"
     CATEGORY = CATEGORY
 
-    @classmethod
-    def IS_CHANGED(cls, **kwargs):
-        return float("nan")
-
+    # No IS_CHANGED: the output depends only on this node's own inputs (path /
+    # mode / sequence_pattern), so ComfyUI's default input-hash caching is correct
+    # and downstream stays cached until one of them changes.
     def get_path(self, path, mode="folder", sequence_pattern="off"):
         if mode == "file":
             path = _replace_frame_number(path, sequence_pattern)
