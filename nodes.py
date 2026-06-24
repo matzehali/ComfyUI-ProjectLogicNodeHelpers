@@ -178,8 +178,11 @@ def _prompt_field(prompt, ins, name):
     if isinstance(v, list) and len(v) == 2:
         up = prompt.get(str(v[0])) or prompt.get(v[0])
         if isinstance(up, dict):
+            # Return the first scalar widget value off the upstream node — a string
+            # path (SelectPath etc.) or a numeric source (e.g. an external seed/INT
+            # node wired into global_seed).
             for val in (up.get("inputs") or {}).values():
-                if isinstance(val, str):
+                if isinstance(val, (str, int, float)) and not isinstance(val, bool):
                     return val
         return None
     return v
@@ -285,12 +288,16 @@ class ProjectLogicExtract:
             if bundle is None:
                 return float("nan")
             entry = _pass_for(bundle, pass_name)
+            # Deliberately excludes the raw seed. The seed only matters to passes
+            # whose path actually uses the {seed} token — already captured here via
+            # sequence_path/directory/filename. Passes that don't (e.g. the plate the
+            # tracker reads) then stay cached when only the seed changes, so changing
+            # the seed re-runs the generator/output passes but not the tracker.
             return repr((
                 entry.get("sequence_path", ""),
                 entry.get("directory", ""),
                 entry.get("filename", ""),
                 int(base_frame_count(bundle) or 0),
-                int(bundle.get("seed", 0)),
             ))
         except Exception:
             return float("nan")
