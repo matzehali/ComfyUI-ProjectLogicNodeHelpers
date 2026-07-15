@@ -12,7 +12,7 @@ import re
 import zlib
 
 
-FALLBACK_VERSION = "v0.1.0"
+FALLBACK_VERSION = "v0.29.9"
 
 
 def _read_text(path: Path) -> str:

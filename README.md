@@ -51,10 +51,12 @@ the **ComfyUI server host**, so it's meant for local use.
 ### Project Logic Extract
 `pass_name` is a dropdown **auto-filled with the project's configured passes**
 (plus `output`/`plate`). Outputs: `full_path` (loader-ready, incl. ext), `pathtofile`
-(folder), `file` (saver-ready filename — no ext, keeps `####`), `framecount`, `seed`.
+(folder), `file` (saver-ready filename — no ext, keeps `####`), `extension`
+(lowercase, no leading dot), `framecount`, `seed`. The four string outputs are
+shown inline on the node after every execution.
 
-* CoCo **SaverNode**: `pathtofile` → `file_path`, `file` → `filename` (set the
-  saver's `file_type` to your pass ext).
+* CoCo **SaverNode**: `pathtofile` → `file_path`, `file` → `filename`,
+  `extension` → `file_type`.
 * CoCo **EXR sequence loader**: `full_path` → `sequence_path`.
 
 ### Project Logic Constants

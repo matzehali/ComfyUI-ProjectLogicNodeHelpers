@@ -8,7 +8,7 @@ Nodes:
                                bundle without a wire (only one hub per workflow).
 * ``ProjectLogicExtract``     – selects a configured pass (dropdown auto-filled from
                                the project) and emits full_path / pathtofile / file /
-                               framecount / seed.
+                               extension / framecount / seed.
 * ``ProjectLogicConstants``   – emits workflow-wide constants: global_frames / seed.
 * ``ProjectLogicRouterMaster``– broadcast selector: defines its own ordered list of
                                switch values and sets the active one (no output noodles).
@@ -276,8 +276,8 @@ class ProjectLogicExtract:
             "hidden": {"prompt": "PROMPT"},
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "INT", "INT")
-    RETURN_NAMES = ("full_path", "pathtofile", "file", "framecount", "seed")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "INT", "INT")
+    RETURN_NAMES = ("full_path", "pathtofile", "file", "extension", "framecount", "seed")
     FUNCTION = "extract"
     CATEGORY = CATEGORY
 
@@ -300,6 +300,7 @@ class ProjectLogicExtract:
                 entry.get("sequence_path", ""),
                 entry.get("directory", ""),
                 entry.get("filename", ""),
+                entry.get("ext", ""),
                 int(base_frame_count(bundle) or 0),
             ))
         except Exception:
@@ -318,13 +319,15 @@ class ProjectLogicExtract:
         # to the configured model needs.
         fc = base_frame_count(bundle)
 
-        return (
+        result = (
             seq,                          # full_path  (loader-ready, incl. ext)
             entry.get("directory", ""),   # pathtofile (folder)
             entry.get("filename", ""),    # file       (saver-ready stem, no ext, with ####)
+            entry.get("ext", ""),         # extension  (saver-ready, no leading dot)
             int(fc or 0),                 # framecount
             int(bundle.get("seed", 0)),   # seed
         )
+        return {"ui": {"resolved_strings": list(result[:4])}, "result": result}
 
 
 # --------------------------------------------------------------------------- #

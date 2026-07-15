@@ -615,6 +615,30 @@ function setupConsumer(node, withPassName) {
   }
 }
 
+function setupExtract(node) {
+  setupConsumer(node, true);
+
+  const pre = document.createElement("pre");
+  pre.style.cssText =
+    "white-space:pre-wrap;word-break:break-all;font-size:10px;line-height:1.3;" +
+    "color:#cdd;background:#1b1b1b;border:1px solid #333;border-radius:4px;" +
+    "padding:6px;margin:0;overflow:auto;max-height:300px;";
+  pre.textContent = "(run to resolve outputs)";
+
+  const widget = node.addDOMWidget("resolved_outputs", "div", pre, { serialize: false });
+  widget.computeSize = () => [node.size[0], Math.min(300, Math.max(80, pre.scrollHeight + 14))];
+
+  const labels = ["full_path", "pathtofile", "file", "extension"];
+  const prev = node.onExecuted;
+  node.onExecuted = function (message) {
+    prev?.apply(this, arguments);
+    const values = Array.isArray(message?.resolved_strings) ? message.resolved_strings : [];
+    pre.textContent = labels.map((label, index) => `${label}:\n${values[index] ?? ""}`).join("\n\n");
+    node.setSize?.(node.computeSize());
+    node.setDirtyCanvas?.(true, true);
+  };
+}
+
 function setupPreview(node) {
   setupConsumer(node, false);
 
@@ -654,7 +678,7 @@ app.registerExtension({
           if (!removeIfDuplicate(node)) notifyChange();
         }, 30);
       } else if (node.comfyClass === "ProjectLogicExtract") {
-        setupConsumer(node, true);
+        setupExtract(node);
       } else if (node.comfyClass === "ProjectLogicPreview") {
         setupPreview(node);
       }
