@@ -2,3 +2,4 @@
 # (e.g. `brew install ffmpeg`); static-ffmpeg provides a pip-installable
 # fallback that bundles ffmpeg + ffprobe binaries.
 static-ffmpeg
+comfyui-mlx-helpers @ git+https://github.com/matzehali/ComfyUI-MLX-helpers.git

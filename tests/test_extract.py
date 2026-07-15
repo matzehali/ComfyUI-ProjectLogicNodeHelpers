@@ -70,6 +70,7 @@ class ExtractContractTests(unittest.TestCase):
             self.assertEqual(result[3], "exr")
             self.assertEqual(result[4:], (0, 2026071404))
             self.assertEqual(response["ui"]["resolved_strings"], list(result[:4]))
+            self.assertEqual(response["ui"]["mlx_resolved_outputs"], [list(result)])
 
 
 if __name__ == "__main__":

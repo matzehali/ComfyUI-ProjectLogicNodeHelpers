@@ -4,3 +4,5 @@ __pycache__/
 .claude/
 AGENTS.md
 web/mlx_node_colors.js
+web/mlx_widget_input_sync.js
+web/widget_input_sync_core.js

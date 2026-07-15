@@ -327,7 +327,13 @@ class ProjectLogicExtract:
             int(fc or 0),                 # framecount
             int(bundle.get("seed", 0)),   # seed
         )
-        return {"ui": {"resolved_strings": list(result[:4])}, "result": result}
+        return {
+            "ui": {
+                "resolved_strings": list(result[:4]),
+                "mlx_resolved_outputs": [list(result)],
+            },
+            "result": result,
+        }
 
 
 # --------------------------------------------------------------------------- #

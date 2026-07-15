@@ -24,8 +24,13 @@ try:
     # Copy the shared MLX node colors into our own web dir (we already serve ./web).
     try:
         import os as _os
-        from comfyui_mlx_helpers import install_node_colors as _install_node_colors
-        _install_node_colors(_os.path.join(_os.path.dirname(__file__), "web"))
+        from comfyui_mlx_helpers import (
+            install_node_colors as _install_node_colors,
+            install_widget_input_sync as _install_widget_input_sync,
+        )
+        _web_dir = _os.path.join(_os.path.dirname(__file__), "web")
+        _install_node_colors(_web_dir)
+        _install_widget_input_sync(_web_dir)
     except Exception:
         pass
 

@@ -633,6 +633,10 @@ function setupExtract(node) {
   node.onExecuted = function (message) {
     prev?.apply(this, arguments);
     const values = Array.isArray(message?.resolved_strings) ? message.resolved_strings : [];
+    const resolvedOutputs = message?.mlx_resolved_outputs?.[0];
+    this.__mlxResolvedOutputs = Array.isArray(resolvedOutputs)
+      ? resolvedOutputs
+      : values;
     pre.textContent = labels.map((label, index) => `${label}:\n${values[index] ?? ""}`).join("\n\n");
     node.setSize?.(node.computeSize());
     node.setDirtyCanvas?.(true, true);
