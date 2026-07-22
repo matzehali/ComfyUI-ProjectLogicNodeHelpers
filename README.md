@@ -52,12 +52,20 @@ the **ComfyUI server host**, so it's meant for local use.
 `pass_name` is a dropdown **auto-filled with the project's configured passes**
 (plus `output`/`plate`). Outputs: `full_path` (loader-ready, incl. ext), `pathtofile`
 (folder), `file` (saver-ready filename — no ext, keeps `####`), `extension`
-(lowercase, no leading dot), `framecount`, `seed`. The four string outputs are
-shown inline on the node after every execution.
+(general lowercase string, no leading dot), `framecount`, `seed`, and `file_type`
+(the exact CoCo Saver combo contract). The four path strings are shown inline on
+the node after every execution.
 
 * CoCo **SaverNode**: `pathtofile` → `file_path`, `file` → `filename`,
-  `extension` → `file_type`.
+  `file_type` → `file_type`. Existing workflows wired from the older general
+  `extension` STRING should move that link to the appended `file_type` output.
 * CoCo **EXR sequence loader**: `full_path` → `sequence_path`.
+
+Extract is output-aware: path/file-type previews do not count the base sequence,
+seed previews do not request a linked `pass_name`, and frame counting runs only
+when `framecount` is actually consumed. Constants follows the same rule, so a
+seed-only preview does not scan the plate/base clip. Both publish authoritative
+resolved output values for connected-widget display.
 
 ### Project Logic Constants
 Reads the same hub config as Extract and emits only workflow-wide values:
@@ -79,6 +87,8 @@ A wireless switch so one dropdown reroutes the whole graph.
   active value and **draws a link from the active input to the output**; with no master
   it shows a red "no Router Master" note. Renaming a master's title only updates the
   displayed name — the link (by id) is unchanged.
+  Only the active linked input is requested at execution time; inactive model,
+  image, or loader branches remain unscheduled.
 
 ### Pack Noodles / Unpack Noodles
 Carry several labelled noodles on a single wire — e.g. to route a whole group through
@@ -98,6 +108,13 @@ one Router Slave.
 ### Project Logic Preview
 Shows the resolved bundle (seq path / dir / file / frame count per pass) **inline on
 the node** after a run — no separate Display node needed.
+
+## Output execution contracts
+
+Every value-producing node declares a complete output-to-input dependency map.
+Multi-output nodes use the shared `comfyui_mlx_helpers` partial-target transport,
+and unknown/missing target data falls back conservatively. This keeps previews
+path-specific without weakening correctness when the shared frontend is absent.
 
 ## Notes
 - Shot/plate dropdowns are populated by two read-only server routes

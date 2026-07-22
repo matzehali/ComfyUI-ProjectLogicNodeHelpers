@@ -8,7 +8,7 @@ Nodes:
                                bundle without a wire (only one hub per workflow).
 * ``ProjectLogicExtract``     – selects a configured pass (dropdown auto-filled from
                                the project) and emits full_path / pathtofile / file /
-                               extension / framecount / seed.
+                               extension / framecount / seed / CoCo file_type.
 * ``ProjectLogicConstants``   – emits workflow-wide constants: global_frames / seed.
 * ``ProjectLogicRouterMaster``– broadcast selector: defines its own ordered list of
                                switch values and sets the active one (no output noodles).
@@ -27,11 +27,18 @@ from __future__ import annotations
 import json
 import os
 
+from comfyui_mlx_helpers import (
+    PARTIAL_EXECUTION_TARGETS_INPUT,
+    mark_traced_inputs_lazy,
+    parse_partial_execution_targets,
+    requested_outputs_for_node,
+    required_inputs_for_node,
+)
+
 from .paths import (
     _SEQ_FILE_RE,
     DEFAULT_TEMPLATE,
     OUTPUT_TEMPLATE,
-    count_sequence,
     frame_count_for,
     render_template,
     split_path,
@@ -42,6 +49,7 @@ CATEGORY = "projectlogic"
 MAX_SWITCH_INPUTS = 16
 MAX_GROUP_SLOTS = 16
 GROUP_TYPE = "PL_GROUP"
+_COCO_FILE_TYPES = ["exr", "png", "jpg", "webp", "tiff"]
 
 # Hub config keys read from the submitted prompt to rebuild the bundle.
 CONFIG_FIELDS = (
@@ -71,6 +79,63 @@ _DEFAULT_PASSES = json.dumps(
         {"type": "depthmap", "ext": "exr", "kind": "sequence", "own_subfolder": True, "template": ""},
     ]
 )
+
+
+def _traced_input_types(input_types, dependencies, *, lazy_names=None):
+    """Add the shared partial-target envelope and mark traced links lazy."""
+
+    input_types = dict(input_types)
+    hidden = dict(input_types.get("hidden") or {})
+    hidden.setdefault("prompt", "PROMPT")
+    hidden.setdefault("unique_id", "UNIQUE_ID")
+    hidden[PARTIAL_EXECUTION_TARGETS_INPUT] = "STRING"
+    input_types["hidden"] = hidden
+    if lazy_names is None:
+        lazy_dependencies = dependencies
+    else:
+        lazy_dependencies = {0: tuple(lazy_names)}
+    return mark_traced_inputs_lazy(input_types, lazy_dependencies)
+
+
+def _partial_roots(value):
+    return parse_partial_execution_targets(value)
+
+
+def _requested_indexes(prompt, unique_id, partial_targets, output_count):
+    requested = requested_outputs_for_node(
+        prompt,
+        unique_id,
+        output_node_ids=_partial_roots(partial_targets),
+    )
+    traced = prompt is not None and unique_id is not None and bool(requested)
+    return (requested if traced else frozenset(range(output_count))), traced
+
+
+def _coco_file_type(extension):
+    value = str(extension or "").lower()
+    if value not in _COCO_FILE_TYPES:
+        raise ValueError(
+            "ProjectLogicExtract: the selected pass extension "
+            f"{value!r} is not accepted by CoCo Saver's file_type input. "
+            f"Choose one of: {', '.join(_COCO_FILE_TYPES)}."
+        )
+    return value
+
+
+class _TracedOutputNode:
+    def check_lazy_status(
+        self,
+        prompt=None,
+        unique_id=None,
+        _mlx_partial_execution_targets=None,
+        **kwargs,
+    ):
+        return required_inputs_for_node(
+            prompt,
+            unique_id,
+            type(self),
+            output_node_ids=_partial_roots(_mlx_partial_execution_targets),
+        )
 
 
 def _pass_entry(template, root, shot, type_, ext, seed, kind):
@@ -130,7 +195,6 @@ def build_bundle(project_path="", shot="", global_seed=0,
         plate_seq = plate_clip if os.path.isabs(plate_clip) else os.path.join(shot_dir, plate_clip)
     else:
         plate_seq = ""
-    _, plate_count = count_sequence(plate_seq)
     p_dir, p_fileext, p_stem, p_ext = split_path(plate_seq)
     passes["plate"] = {
         "type": "plate",
@@ -140,7 +204,9 @@ def build_bundle(project_path="", shot="", global_seed=0,
         "sequence_path": plate_seq,
         "ext": p_ext,
         "kind": "movie" if (p_ext.lower() in ("mov", "mp4", "mkv", "avi", "mxf")) else "sequence",
-        "frame_count": plate_count,
+        # Frame counting is deliberately deferred until a framecount output or
+        # the full Preview actually requests it.
+        "frame_count": None,
     }
 
     return {
@@ -265,73 +331,128 @@ class ProjectLogic:
 # Node 2 — the extractor (pass dropdown auto-filled from the project)
 # --------------------------------------------------------------------------- #
 
-class ProjectLogicExtract:
+class ProjectLogicExtract(_TracedOutputNode):
+    OUTPUT_INPUT_DEPENDENCIES = {
+        0: ("pass_name",),
+        1: ("pass_name",),
+        2: ("pass_name",),
+        3: ("pass_name",),
+        4: (),
+        5: (),
+        6: ("pass_name",),
+    }
+
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return _traced_input_types({
             "required": {
                 # Populated in JS from the project's configured passes.
                 "pass_name": ("STRING", {"default": "base"}),
             },
             "hidden": {"prompt": "PROMPT"},
-        }
+        }, cls.OUTPUT_INPUT_DEPENDENCIES)
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "INT", "INT")
-    RETURN_NAMES = ("full_path", "pathtofile", "file", "extension", "framecount", "seed")
+    RETURN_TYPES = (
+        "STRING", "STRING", "STRING", "STRING", "INT", "INT", _COCO_FILE_TYPES,
+    )
+    RETURN_NAMES = (
+        "full_path", "pathtofile", "file", "extension", "framecount", "seed", "file_type",
+    )
     FUNCTION = "extract"
     CATEGORY = CATEGORY
 
     @classmethod
-    def IS_CHANGED(cls, pass_name="base", prompt=None, **kwargs):
+    def IS_CHANGED(
+        cls,
+        pass_name="base",
+        prompt=None,
+        unique_id=None,
+        _mlx_partial_execution_targets=None,
+        **kwargs,
+    ):
         # Cache key = the resolved output, so downstream (e.g. the tracker) only
         # re-runs when the extracted values actually change — not every execution.
         # Falls back to "always changed" if the project bundle can't be resolved.
+        # The master selection and slot order are submitted as ordinary widget
+        # values. Inspecting the prompt here only checks which slots have links;
+        # it does not execute their upstream branches.
         try:
             bundle = _bundle_from_prompt(prompt)
             if bundle is None:
                 return float("nan")
-            entry = _pass_for(bundle, pass_name)
-            # Deliberately excludes the raw seed. The seed only matters to passes
+            requested, _ = _requested_indexes(
+                prompt,
+                unique_id,
+                _mlx_partial_execution_targets,
+                len(cls.RETURN_TYPES),
+            )
+            entry = _pass_for(bundle, pass_name) if requested.intersection({0, 1, 2, 3, 6}) else None
+            # Path cache keys deliberately exclude the raw seed. The seed only matters to passes
             # whose path actually uses the {seed} token — already captured here via
             # sequence_path/directory/filename. Passes that don't (e.g. the plate the
             # tracker reads) then stay cached when only the seed changes, so changing
             # the seed re-runs the generator/output passes but not the tracker.
-            return repr((
-                entry.get("sequence_path", ""),
-                entry.get("directory", ""),
-                entry.get("filename", ""),
-                entry.get("ext", ""),
-                int(base_frame_count(bundle) or 0),
-            ))
+            values = []
+            for index in sorted(requested):
+                if index == 0:
+                    values.append(entry.get("sequence_path", ""))
+                elif index == 1:
+                    values.append(entry.get("directory", ""))
+                elif index == 2:
+                    values.append(entry.get("filename", ""))
+                elif index in (3, 6):
+                    values.append(entry.get("ext", ""))
+                elif index == 4:
+                    values.append(int(base_frame_count(bundle) or 0))
+                elif index == 5:
+                    values.append(int(bundle.get("seed", 0)))
+            return repr(tuple(values))
         except Exception:
             return float("nan")
 
-    def extract(self, pass_name, prompt=None):
+    def extract(
+        self,
+        pass_name=None,
+        prompt=None,
+        unique_id=None,
+        _mlx_partial_execution_targets=None,
+        **kwargs,
+    ):
         bundle = _bundle_from_prompt(prompt)
         if bundle is None:
             raise ValueError(
                 "ProjectLogicExtract: no Project Logic node found in the workflow."
             )
 
-        entry = _pass_for(bundle, pass_name)
-        seq = entry.get("sequence_path", "")
-        # Length is the project's single base length (drives all passes), padded
-        # to the configured model needs.
-        fc = base_frame_count(bundle)
-
-        result = (
-            seq,                          # full_path  (loader-ready, incl. ext)
-            entry.get("directory", ""),   # pathtofile (folder)
-            entry.get("filename", ""),    # file       (saver-ready stem, no ext, with ####)
-            entry.get("ext", ""),         # extension  (saver-ready, no leading dot)
-            int(fc or 0),                 # framecount
-            int(bundle.get("seed", 0)),   # seed
+        requested, traced = _requested_indexes(
+            prompt,
+            unique_id,
+            _mlx_partial_execution_targets,
+            len(self.RETURN_TYPES),
         )
+        needs_entry = bool(requested.intersection({0, 1, 2, 3, 6}))
+        entry = _pass_for(bundle, pass_name or "base") if needs_entry else None
+        result = [None] * len(self.RETURN_TYPES)
+        if entry is not None:
+            # Resolving one path component resolves the whole cheap path tuple,
+            # which also keeps the node's inline path display coherent.
+            result[0] = entry.get("sequence_path", "")
+            result[1] = entry.get("directory", "")
+            result[2] = entry.get("filename", "")
+            result[3] = entry.get("ext", "")
+            if 6 in requested:
+                extension = entry.get("ext", "")
+                result[6] = _coco_file_type(extension) if traced else extension
+        if 4 in requested:
+            result[4] = int(base_frame_count(bundle) or 0)
+        if 5 in requested:
+            result[5] = int(bundle.get("seed", 0))
+        result = tuple(result)
+        ui = {"mlx_resolved_outputs": [list(result)]}
+        if entry is not None:
+            ui["resolved_strings"] = list(result[:4])
         return {
-            "ui": {
-                "resolved_strings": list(result[:4]),
-                "mlx_resolved_outputs": [list(result)],
-            },
+            "ui": ui,
             "result": result,
         }
 
@@ -340,13 +461,15 @@ class ProjectLogicExtract:
 # Node 3 — constants (global frames + seed)
 # --------------------------------------------------------------------------- #
 
-class ProjectLogicConstants:
+class ProjectLogicConstants(_TracedOutputNode):
+    OUTPUT_INPUT_DEPENDENCIES = {0: (), 1: ()}
+
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        return _traced_input_types({
             "required": {},
             "hidden": {"prompt": "PROMPT"},
-        }
+        }, cls.OUTPUT_INPUT_DEPENDENCIES)
 
     RETURN_TYPES = ("INT", "INT")
     RETURN_NAMES = ("global_frames", "seed")
@@ -354,27 +477,57 @@ class ProjectLogicConstants:
     CATEGORY = CATEGORY
 
     @classmethod
-    def IS_CHANGED(cls, prompt=None, **kwargs):
+    def IS_CHANGED(
+        cls,
+        prompt=None,
+        unique_id=None,
+        _mlx_partial_execution_targets=None,
+        **kwargs,
+    ):
         # Cache key = the resolved output (see ProjectLogicExtract).
         try:
             bundle = _bundle_from_prompt(prompt)
             if bundle is None:
                 return float("nan")
-            return repr((int(base_frame_count(bundle) or 0), int(bundle.get("seed", 0))))
+            requested, _ = _requested_indexes(
+                prompt,
+                unique_id,
+                _mlx_partial_execution_targets,
+                len(cls.RETURN_TYPES),
+            )
+            values = []
+            if 0 in requested:
+                values.append(int(base_frame_count(bundle) or 0))
+            if 1 in requested:
+                values.append(int(bundle.get("seed", 0)))
+            return repr(tuple(values))
         except Exception:
             return float("nan")
 
-    def constants(self, prompt=None):
+    def constants(
+        self,
+        prompt=None,
+        unique_id=None,
+        _mlx_partial_execution_targets=None,
+        **kwargs,
+    ):
         bundle = _bundle_from_prompt(prompt)
         if bundle is None:
             raise ValueError(
                 "ProjectLogicConstants: no Project Logic node found in the workflow."
             )
 
-        return (
-            int(base_frame_count(bundle) or 0),
-            int(bundle.get("seed", 0)),
+        requested, _ = _requested_indexes(
+            prompt,
+            unique_id,
+            _mlx_partial_execution_targets,
+            len(self.RETURN_TYPES),
         )
+        result = (
+            int(base_frame_count(bundle) or 0) if 0 in requested else None,
+            int(bundle.get("seed", 0)) if 1 in requested else None,
+        )
+        return {"ui": {"mlx_resolved_outputs": [list(result)]}, "result": result}
 
 
 # --------------------------------------------------------------------------- #
@@ -426,12 +579,19 @@ class ProjectLogicRouterSlave:
     unique node id (the real link); ``active_type`` mirrors the master's selection.
     """
 
+    OUTPUT_INPUT_DEPENDENCIES = {
+        0: (
+            "master", "router_id", "active_type", "slot_types",
+            *(f"input_{i}" for i in range(1, MAX_SWITCH_INPUTS + 1)),
+        ),
+    }
+
     @classmethod
     def INPUT_TYPES(cls):
         optional = {}
         for i in range(1, MAX_SWITCH_INPUTS + 1):
             optional[f"input_{i}"] = (ANY,)
-        return {
+        return _traced_input_types({
             "required": {
                 # master: visible title picker (JS combo). The rest are JS-managed
                 # and hidden. Fresh slaves start unconnected.
@@ -441,12 +601,44 @@ class ProjectLogicRouterSlave:
                 "slot_types": ("STRING", {"default": "[]"}),
             },
             "optional": optional,
-        }
+        }, cls.OUTPUT_INPUT_DEPENDENCIES, lazy_names=optional)
 
     RETURN_TYPES = (ANY,)
     RETURN_NAMES = ("out",)
     FUNCTION = "route"
     CATEGORY = CATEGORY
+
+    def check_lazy_status(
+        self,
+        master="",
+        router_id="",
+        active_type="",
+        slot_types="[]",
+        prompt=None,
+        unique_id=None,
+        **kwargs,
+    ):
+        try:
+            types = json.loads(slot_types)
+            if not isinstance(types, list):
+                types = []
+        except (ValueError, TypeError):
+            types = []
+        selected = None
+        if active_type and active_type in types:
+            selected = f"input_{types.index(active_type) + 1}"
+        node = None
+        if isinstance(prompt, dict):
+            node = prompt.get(str(unique_id)) or prompt.get(unique_id)
+        submitted = (node or {}).get("inputs", {}) if isinstance(node, dict) else {}
+        if selected and selected in submitted:
+            return [selected]
+        for i in range(1, MAX_SWITCH_INPUTS + 1):
+            name = f"input_{i}"
+            if name in submitted:
+                return [name]
+        # Without a prompt envelope, keep every possible branch conservative.
+        return [f"input_{i}" for i in range(1, MAX_SWITCH_INPUTS + 1)]
 
     def route(self, master="", router_id="", active_type="", slot_types="[]", **kwargs):
         try:
@@ -472,6 +664,8 @@ class ProjectLogicRouterSlave:
 # --------------------------------------------------------------------------- #
 
 class ProjectLogicPreview:
+    OUTPUT_INPUT_DEPENDENCIES = {0: ()}
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -489,7 +683,7 @@ class ProjectLogicPreview:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
-    def preview(self, prompt=None):
+    def preview(self, prompt=None, **kwargs):
         bundle = _bundle_from_prompt(prompt)
         if bundle is None:
             text = "(no project — add a Project Logic node)"
@@ -528,6 +722,13 @@ class PackNoodles:
     being routed through a Router Slave.
     """
 
+    OUTPUT_INPUT_DEPENDENCIES = {
+        0: (
+            "auto_label", "labels_json",
+            *(f"in_{i}" for i in range(1, MAX_GROUP_SLOTS + 1)),
+        ),
+    }
+
     @classmethod
     def INPUT_TYPES(cls):
         optional = {}
@@ -564,23 +765,30 @@ class PackNoodles:
         return ({"labels": labels, "values": values},)
 
 
-class UnpackNoodles:
+class UnpackNoodles(_TracedOutputNode):
     """Restore the labelled noodles from a ``PL_GROUP`` bundle.
 
     Output slots are renamed (in JS) to the bundle's labels — read upstream at
     edit time and refreshed from the actual bundle after a run.
     """
 
+    OUTPUT_INPUT_DEPENDENCIES = {
+        index: ("group",) for index in range(MAX_GROUP_SLOTS)
+    }
+
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"group": (GROUP_TYPE,)}}
+        return _traced_input_types(
+            {"required": {"group": (GROUP_TYPE,)}},
+            cls.OUTPUT_INPUT_DEPENDENCIES,
+        )
 
     RETURN_TYPES = tuple(ANY for _ in range(MAX_GROUP_SLOTS))
     RETURN_NAMES = tuple(f"out_{i}" for i in range(1, MAX_GROUP_SLOTS + 1))
     FUNCTION = "unpack"
     CATEGORY = CATEGORY
 
-    def unpack(self, group=None):
+    def unpack(self, group=None, **kwargs):
         labels, values = [], []
         if isinstance(group, dict):
             labels = group.get("labels") or []
@@ -617,6 +825,8 @@ def _replace_frame_number(path: str, style: str) -> str:
 class ProjectLogicSelectPath:
     """Pick a path with the native OS dialog (Browse button) and output it."""
 
+    OUTPUT_INPUT_DEPENDENCIES = {0: ("path", "mode", "sequence_pattern")}
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -642,7 +852,7 @@ class ProjectLogicSelectPath:
     # No IS_CHANGED: the output depends only on this node's own inputs (path /
     # mode / sequence_pattern), so ComfyUI's default input-hash caching is correct
     # and downstream stays cached until one of them changes.
-    def get_path(self, path, mode="folder", sequence_pattern="off"):
+    def get_path(self, path, mode="folder", sequence_pattern="off", **kwargs):
         if mode == "file":
             path = _replace_frame_number(path, sequence_pattern)
         return (path,)
